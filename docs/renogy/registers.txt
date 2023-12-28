@@ -1,0 +1,39 @@
+
+The below is a list of supported registers for device information:
+
+|0x00A|Controller voltage rating|Volts|
+|0x00A|Controller current rating|Amps|
+|0x00B|Controller discharge current rating|Amps|
+|0x00B|Controller type||
+|0x00C - 0x013|Controller model name||
+|0x014 - 0x015|Controller software version||
+|0x016 - 0x017|Controller hardware version||
+|0x018 - 0x019|Controller serial number||
+|0x01A|Controller MODBUS address|
+
+The below is a list of supported registers for state data:
+
+|0x100|Battery Capacity|Percent|
+|0x101|Battery Voltage|Volts|
+|0x102|Battery Charge Current|Amps|
+|0x103|Battery Temperature|Celcius|
+|0x103|Controller Temperature|Celcius|
+|0x104|Load Voltage|Volts|
+|0x105|Load Current|Amps|
+|0x106|Load Power|Watts|
+|0x107|Solar Panel (PV) Voltage|Volts|
+|0x108|Solar Panel (PV) Current|Amps|
+|0x109|Solar Panel (PV) Power|Watts|
+|0x10B|Min Battery Voltage Today|Volts|
+|0x10C|Min Battery Voltage Today|Volts|
+|0x10D|Max Charge Current Today|Amps|
+|0x10E|Max Discharge Current Today|Amps|
+|0x10F|Max Charge Power Today|Watts|
+|0x110|Max Discharge Power Today|Watts|
+|0x111|Charge Amp/Hrs Today|Amp Hours|
+|0x112|Discharge Amp/Hrs Today|Amp Hours|
+|0x113|Charge Watt/Hrs Today|Watt Hours|
+|0x114|Discharge Watt/Hrs Today|Watt Hours|
+|0x115|Controller Uptime|Days|
+|0x116|Total Battery Over-charges|Count|
+|0x117|Total Battery Full Charges|Count|
