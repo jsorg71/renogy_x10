@@ -5,9 +5,8 @@
 #include <errno.h>
 #include <modbus.h>
 
-#define RENOGY_ID  1
-
 static int g_debug = 0;
+static int g_renogy_id = 1;
 
 int
 main(int argc, char** argv)
@@ -17,13 +16,9 @@ main(int argc, char** argv)
     uint32_t response_usec;
     modbus_error_recovery_mode er_mode;
     uint16_t tab_rp_registers[4];
-    //int index;
     int error;
-    //int slave_id;
 
-    //ctx = modbus_new_rtu("/dev/ttyS0", 115200, 'N', 8, 1);
     ctx = modbus_new_rtu("/dev/ttyS0", 9600, 'N', 8, 1);
-    //ctx = modbus_new_rtu("/dev/ttyS0", 14400, 'N', 8, 1);
     if (ctx == NULL)
     {
         return 1;
@@ -40,7 +35,7 @@ main(int argc, char** argv)
     error = modbus_set_error_recovery(ctx, er_mode);
     printf("modbus_set_error_recovery error %d\n", error);
 
-    modbus_set_slave(ctx, RENOGY_ID);
+    modbus_set_slave(ctx, g_renogy_id);
 
     error = modbus_get_response_timeout(ctx,
                                         &response_sec,
@@ -60,11 +55,13 @@ main(int argc, char** argv)
 
     tab_rp_registers[0] = 0;
     modbus_read_registers(ctx, 0x100, 1, tab_rp_registers);
-    printf("modbus_read_registers 0x100 error %d read 0x%4.4X %d\n", error, tab_rp_registers[0], tab_rp_registers[0]);
+    printf("modbus_read_registers 0x100 error %d read 0x%4.4X %d\n", error,
+           tab_rp_registers[0], tab_rp_registers[0]);
 
     tab_rp_registers[0] = 0;
     modbus_read_registers(ctx, 0x101, 1, tab_rp_registers);
-    printf("modbus_read_registers 0x101 error %d read 0x%4.4X %d\n", error, tab_rp_registers[0], tab_rp_registers[0]);
+    printf("modbus_read_registers 0x101 error %d read 0x%4.4X %d\n", error,
+           tab_rp_registers[0], tab_rp_registers[0]);
 
     modbus_free(ctx);
     return 0;
