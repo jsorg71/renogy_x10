@@ -11,19 +11,13 @@
 #include <arpa/inet.h>
 #include <modbus.h>
 
-/*
-POST /write?db=voltages&u=&p= HTTP/1.1
-Host: 205.5.60.14:8086
-Content-Length: 37
-
-renogy,host=serverA value=203.000
-*/
-
 static int g_renogy_id = 1;
 static int g_renogy_voltage_reg = 0x0101;
 
 static const char* g_influx_database = "voltages";
-static const char* g_influx_token = "Wh4XF_BN120-dvfZiI0T6L7DIdG7Ma8JnSMW6GnMTpT5uG4qDlBFsEGS_jwo9eBD2pf2jtra7sgi0ajl5R-oEA==";
+static const char* g_influx_token =
+    "Wh4XF_BN120-dvfZiI0T6L7DIdG7Ma8JnSMW6GnMTpT5"
+    "uG4qDlBFsEGS_jwo9eBD2pf2jtra7sgi0ajl5R-oEA==";
 static const char* g_influx_hostname = "205.5.60.14";
 static const int g_influx_port = 8086;
 static const int g_secs = 60;
@@ -109,7 +103,8 @@ main(int argc, char** argv)
         }
         value = tab_rp_registers[0];
         snprintf(buffer2, 1023, "renogy,host=serverA value=%d\n", value);
-        snprintf(buffer1, 1023, "POST /api/v2/write?org=org1&bucket=%s HTTP/1.1\r\n"
+        snprintf(buffer1, 1023,
+                 "POST /api/v2/write?org=org1&bucket=%s HTTP/1.1\r\n"
                  "Host: %s:%d\r\n"
                  "Authorization: Token %s\r\n"
                  "Content-Type: text/plain; charset=utf-8\r\n"
