@@ -23,8 +23,7 @@ static int g_renogy_id = 1;
 static int g_renogy_voltage_reg = 0x0101;
 
 static const char* g_influx_database = "voltages";
-static const char* g_influx_username = "";
-static const char* g_influx_password = "";
+static const char* g_influx_token = "Wh4XF_BN120-dvfZiI0T6L7DIdG7Ma8JnSMW6GnMTpT5uG4qDlBFsEGS_jwo9eBD2pf2jtra7sgi0ajl5R-oEA==";
 static const char* g_influx_hostname = "205.5.60.14";
 static const int g_influx_port = 8086;
 static const int g_secs = 60;
@@ -41,13 +40,24 @@ main(int argc, char** argv)
     int sent;
     uint16_t tab_rp_registers[4];
     struct sockaddr_in serv_addr;
-    char buffer1[256];
-    char buffer2[256];
-    char buffer3[1024];
+    char* buffer1;
+    char* buffer2;
+    char* buffer3;
+
+    buffer1 = (char*)malloc(1024 * 3);
+    if (buffer1 == NULL)
+    {
+        printf("main: malloc failed\n");
+        return 1;
+    }
+    buffer2 = buffer1 + 1024;
+    buffer3 = buffer2 + 1024;
 
     ctx = modbus_new_rtu("/dev/ttyS0", 9600, 'N', 8, 1);
     if (ctx == NULL)
     {
+        printf("main: modbus_new_rtu failed\n");
+        free(buffer1);
         return 1;
     }
     printf("main: modbus_new_rtu ok\n");
@@ -60,6 +70,7 @@ main(int argc, char** argv)
     {
         printf("main: Connection failed: %s\n", modbus_strerror(errno));
         modbus_free(ctx);
+        free(buffer1);
         return 1;
     }
     printf("main: Connection ok\n");
@@ -68,6 +79,7 @@ main(int argc, char** argv)
     {
         printf("main: tcp socket create failed\n");
         modbus_free(ctx);
+        free(buffer1);
         return 1;
     }
     printf("main: tcp sck created ok\n");
@@ -82,6 +94,7 @@ main(int argc, char** argv)
         printf("main: tcp connect failed\n");
         close(sck);
         modbus_free(ctx);
+        free(buffer1);
         return 1;
     }
     printf("main: tcp connected\n");
@@ -95,11 +108,18 @@ main(int argc, char** argv)
             break;
         }
         value = tab_rp_registers[0];
-        snprintf(buffer2, 255, "renogy,host=serverA value=%d\n", value);
-        snprintf(buffer1, 255, "POST /write?db=%s&u=%s&p=%s HTTP/1.1\r\n"
-                 "Host: %s:%d\r\nContent-Length: %d\r\n\r\n",
-                 g_influx_database, g_influx_username, g_influx_password,
-                 g_influx_hostname, g_influx_port, strlen(buffer2));
+        snprintf(buffer2, 1023, "renogy,host=serverA value=%d\n", value);
+        snprintf(buffer1, 1023, "POST /api/v2/write?org=org1&bucket=%s HTTP/1.1\r\n"
+                 "Host: %s:%d\r\n"
+                 "Authorization: Token %s\r\n"
+                 "Content-Type: text/plain; charset=utf-8\r\n"
+                 "Accept: application/json\r\n"
+                 "Content-Length: %d\r\n\r\n",
+                 g_influx_database,
+                 g_influx_hostname,
+                 g_influx_port,
+                 g_influx_token,
+                 strlen(buffer2));
         to_send = strlen(buffer1);
         sent = write(sck, buffer1, to_send);
         if (to_send != sent)
@@ -130,5 +150,6 @@ main(int argc, char** argv)
     }
     close(sck);
     modbus_free(ctx);
+    free(buffer1);
     return 0;
 }
