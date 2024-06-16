@@ -24,29 +24,6 @@ static const char* g_influx_hostname = "server3.xrdp.org";
 static const int g_influx_port = 8086;
 static const int g_secs = 60;
 
-#if 0
-static int
-my_write(int sck, const void* data, int bytes)
-{
-    int sent;
-    int error;
-    const char* ldata;
-
-    sent = 0;
-    ldata = (const char*)data;
-    while (sent < bytes)
-    {
-        error = write(sck, ldata + sent, bytes - sent);
-        if (error < 1)
-        {
-            return 1;
-        }
-        sent += error;
-    }
-    return 0;
-}
-#endif
-
 int
 get_mstime(int* mstime)
 {
@@ -188,7 +165,6 @@ main(int argc, char** argv)
                  g_influx_token,
                  buffer2_bytes);
         buffer1_bytes = strlen(buffer1);
-#if 1
         /* send 2 buffers out */
         buffer1_sent = 0;
         buffer2_sent = 0;
@@ -230,13 +206,9 @@ main(int argc, char** argv)
             }
             if (buffer2_sent >= buffer2_bytes)
             {
-                //get_mstime(&now);
-                //printf("main: write ok %10.10d diff %10.10d\n", now, now - last_send_time);
                 break;
             }
         }
-        //get_mstime(&now);
-        //last_send_time = now;
         end_send_time = start_send_time + g_secs * 1000;
         /* wait up to g_secs for response */
         buffer3_read = 0;
@@ -265,8 +237,6 @@ main(int argc, char** argv)
                         break;
                     }
                     /* all ok */
-                    //get_mstime(&now);
-                    //printf("main: read ok %10.10d\n", now);
                     break;
                 }
                 printf("main: 2 select failed\n");
@@ -288,43 +258,8 @@ main(int argc, char** argv)
                     fatal = 1;
                     break;
                 }
-                //printf(buffer3);
             }
         }
-
-
-#endif
-#if 0
-        buffer1_sent = write(sck, buffer1, buffer1_bytes);
-        if (buffer1_sent != buffer1_bytes)
-        {
-            printf("main: tcp buffer1_sent %d buffer1_bytes %d\n",
-                   buffer1_sent, buffer1_bytes);
-            break;
-        }
-        buffer2_sent = write(sck, buffer2, buffer2_bytes);
-        if (buffer2_sent != buffer2_bytes)
-        {
-            printf("main: tcp buffer2_sent %d buffer2_bytes %d\n",
-                   buffer2_sent, buffer2_bytes);
-            break;
-        }
-#endif
-#if 0
-        memset(buffer3, 0, 1024);
-        error = read(sck, buffer3, 1023);
-        if (error < 1)
-        {
-            printf("main: tcp read error %d\n", error);
-            break;
-        }
-        if (strstr(buffer3, "204 No Content") == NULL)
-        {
-            printf("main: some http error [%s]\n", buffer3);
-            break;
-        }
-        usleep(g_secs * 1000 * 1000);
-#endif
         if (fatal)
         {
             break;
