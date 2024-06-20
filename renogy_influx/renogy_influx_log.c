@@ -11,6 +11,10 @@
 
 #include "renogy_influx_log.h"
 
+#if !defined(_POSIX_MONOTONIC_CLOCK)
+#error no _POSIX_MONOTONIC_CLOCK
+#endif
+
 static int g_log_level = 4;
 static const char g_log_pre[][8] =
 {

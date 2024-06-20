@@ -124,7 +124,7 @@ main(int argc, char** argv)
     int pid;
     uint16_t tab_rp_registers[4];
     struct sockaddr_in serv_addr;
-    struct hostent *he;
+    struct hostent* he;
     struct settings_info* settings;
     fd_set rfds;
     fd_set wfds;
@@ -233,16 +233,14 @@ main(int argc, char** argv)
         free(buffers);
         return 1;
     }
-    strncpy(buffers->influx_ip,
-            inet_ntoa(*((struct in_addr*)(he->h_addr_list[0]))),
-            sizeof(buffers->influx_ip) - 1);
-    buffers->influx_ip[sizeof(buffers->influx_ip) - 1] = 0;
+    snprintf(buffers->influx_ip, sizeof(buffers->influx_ip), "%s",
+             inet_ntoa(*((struct in_addr*)(he->h_addr_list[0]))));
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = inet_addr(buffers->influx_ip);
     serv_addr.sin_port = htons(g_influx_port);
     LOGLN0((LOG_INFO, LOGS "starting tcp connect", LOGP));
-    error = connect(sck, (struct sockaddr *) &serv_addr, sizeof(serv_addr));
+    error = connect(sck, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
     if (error < 0)
     {
         LOGLN0((LOG_ERROR, LOGS "tcp connect failed", LOGP));
