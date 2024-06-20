@@ -11,3 +11,6 @@ LIBS=$(LIBS_LIBMODBUS)
 
 renogy_influx: $(OBJS)
 	$(CC) -o renogy_influx $(OBJS) $(LDFLAGS) $(LIBS)
+
+clean:
+	rm -f renogy_influx $(OBJS)
