@@ -2,7 +2,7 @@
 OBJS=renogy_influx.o renogy_influx_log.o
 
 CFLAGS_LIBMODBUS=$(shell pkg-config --cflags libmodbus)
-CFLAGS=-O2 -Wall $(CFLAGS_LIBMODBUS)
+CFLAGS=-O2 -Wall -Wextra $(CFLAGS_LIBMODBUS)
 
 LDFLAGS=
 
