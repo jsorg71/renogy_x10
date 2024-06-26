@@ -186,7 +186,7 @@ main_send_recv_loop(struct buffers_t* buffers, int sck, int end_send_time)
                 break;
             }
             error = recv(sck, buffers->buffer_in + buffer_in_read,
-                            bm1 - buffer_in_read, 0);
+                         bm1 - buffer_in_read, 0);
             if (error < 1)
             {
                 LOGLN0((LOG_ERROR, LOGS "read failed", LOGP));
@@ -200,7 +200,7 @@ main_send_recv_loop(struct buffers_t* buffers, int sck, int end_send_time)
             if (buffer_out_sent < buffer_out_bytes)
             {
                 error = send(sck, buffers->buffer_out + buffer_out_sent,
-                                buffer_out_bytes - buffer_out_sent, 0);
+                             buffer_out_bytes - buffer_out_sent, 0);
                 if (error < 1)
                 {
                     LOGLN0((LOG_ERROR, LOGS "write failed", LOGP));
@@ -301,7 +301,7 @@ main_connect(struct buffers_t* buffers, modbus_t* ctx)
             LOGLN0((LOG_INFO, LOGS "starting tcp connect", LOGP));
             error = connect(sck, (struct sockaddr*)&serv_addr,
                             sizeof(serv_addr));
-            if (error >= 0)
+            if (error == 0)
             {
                 LOGLN0((LOG_INFO, LOGS "tcp connected", LOGP));
                 rv = main_modbus_loop(buffers, ctx, sck);
@@ -396,11 +396,13 @@ main_fgbg(struct settings_info* settings)
             open("/dev/null", O_WRONLY);
             if (settings->log_filename[0] == 0)
             {
-                snprintf(settings->log_filename, 255,
+                snprintf(settings->log_filename,
+                         sizeof(settings->log_filename),
                          "/tmp/renogy_influx_%d.log", getpid());
             }
             log_init(LOG_FLAG_FILE, 4, settings->log_filename);
             rv = main_modbus();
+            log_deinit();
         }
         else if (error > 0)
         { /* parent */
@@ -416,6 +418,7 @@ main_fgbg(struct settings_info* settings)
     {
         log_init(LOG_FLAG_STDOUT, 4, NULL);
         rv = main_modbus();
+        log_deinit();
     }
     return rv;
 }
