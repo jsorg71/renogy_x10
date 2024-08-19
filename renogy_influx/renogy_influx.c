@@ -43,6 +43,10 @@ struct buffers_t
     char influx_ip[64];
 };
 
+#define ERROR_NONE      0
+#define ERROR_FATAL     1
+#define ERROR_CONNECT   2
+
 /*****************************************************************************/
 static void
 sig_int(int sig)
@@ -124,7 +128,7 @@ main_send_recv_loop(struct buffers_t* buffers, int sck, int end_send_time)
     buffer_in_read = 0;
     for (;;)
     {
-        rv = 1;
+        rv = ERROR_FATAL;
         FD_ZERO(&rfds);
         FD_ZERO(&wfds);
         FD_SET(sck, &rfds);
@@ -162,7 +166,7 @@ main_send_recv_loop(struct buffers_t* buffers, int sck, int end_send_time)
                 {
                     /* all ok */
                     LOGLN10((LOG_INFO, LOGS "ok", LOGP));
-                    rv = 0;
+                    rv = ERROR_NONE;
                     break;
                 }
                 LOGLN0((LOG_ERROR, LOGS "some http error [%s]", LOGP,
@@ -190,6 +194,7 @@ main_send_recv_loop(struct buffers_t* buffers, int sck, int end_send_time)
             if (error < 1)
             {
                 LOGLN0((LOG_ERROR, LOGS "read failed", LOGP));
+                rv = ERROR_CONNECT;
                 break;
             }
             buffer_in_read += error;
@@ -204,6 +209,7 @@ main_send_recv_loop(struct buffers_t* buffers, int sck, int end_send_time)
                 if (error < 1)
                 {
                     LOGLN0((LOG_ERROR, LOGS "write failed", LOGP));
+                    rv = ERROR_CONNECT;
                     break;
                 }
                 buffer_out_sent += error;
@@ -229,7 +235,7 @@ main_modbus_loop(struct buffers_t* buffers, modbus_t* ctx, int sck)
 
     for (;;)
     {
-        rv = 1;
+        rv = ERROR_FATAL;
         now = 0;
         if (get_mstime(&now) != 0)
         {
@@ -263,12 +269,11 @@ main_modbus_loop(struct buffers_t* buffers, modbus_t* ctx, int sck)
                  buffer_con_bytes, buffers->buffer_con);
         end_send_time = start_send_time + g_secs * 1000;
         rv = main_send_recv_loop(buffers, sck, end_send_time);
-        if (rv != 0)
+        if (rv != ERROR_NONE)
         {
             break;
         }
     }
-    LOGLN0((LOG_INFO, LOGS "cleanup", LOGP));
     return rv;
 }
 
@@ -282,44 +287,61 @@ main_connect(struct buffers_t* buffers, modbus_t* ctx)
     struct sockaddr_in serv_addr;
     struct hostent* he;
 
-    rv = 1;
-    sck = socket(AF_INET, SOCK_STREAM, 0);
-    if (sck != -1)
+    for (;;)
     {
-        LOGLN0((LOG_INFO, LOGS "tcp sck created ok", LOGP));
-        he = gethostbyname(g_influx_hostname);
-        if ((he != NULL) &&
-            (he->h_addr_list != NULL) &&
-            (he->h_addr_list[0] != NULL))
+        rv = ERROR_FATAL;
+        sck = socket(AF_INET, SOCK_STREAM, 0);
+        if (sck != -1)
         {
-            snprintf(buffers->influx_ip, sizeof(buffers->influx_ip), "%s",
-                     inet_ntoa(*((struct in_addr*)(he->h_addr_list[0]))));
-            memset(&serv_addr, 0, sizeof(serv_addr));
-            serv_addr.sin_family = AF_INET;
-            serv_addr.sin_addr.s_addr = inet_addr(buffers->influx_ip);
-            serv_addr.sin_port = htons(g_influx_port);
-            LOGLN0((LOG_INFO, LOGS "starting tcp connect", LOGP));
-            error = connect(sck, (struct sockaddr*)&serv_addr,
-                            sizeof(serv_addr));
-            if (error == 0)
+            LOGLN0((LOG_INFO, LOGS "tcp sck created ok", LOGP));
+            he = gethostbyname(g_influx_hostname);
+            if ((he != NULL) &&
+                (he->h_addr_list != NULL) &&
+                (he->h_addr_list[0] != NULL))
             {
-                LOGLN0((LOG_INFO, LOGS "tcp connected", LOGP));
-                rv = main_modbus_loop(buffers, ctx, sck);
+                snprintf(buffers->influx_ip, sizeof(buffers->influx_ip), "%s",
+                        inet_ntoa(*((struct in_addr*)(he->h_addr_list[0]))));
+                memset(&serv_addr, 0, sizeof(serv_addr));
+                serv_addr.sin_family = AF_INET;
+                serv_addr.sin_addr.s_addr = inet_addr(buffers->influx_ip);
+                serv_addr.sin_port = htons(g_influx_port);
+                LOGLN0((LOG_INFO, LOGS "starting tcp connect", LOGP));
+                error = connect(sck, (struct sockaddr*)&serv_addr,
+                                sizeof(serv_addr));
+                if (error == 0)
+                {
+                    LOGLN0((LOG_INFO, LOGS "tcp connected", LOGP));
+                    rv = main_modbus_loop(buffers, ctx, sck);
+                    if (rv == ERROR_CONNECT)
+                    {
+                        LOGLN0((LOG_INFO, LOGS "tcp down, reconnecting after "
+                                "1 min sleep", LOGP));
+                        usleep(1000 * 1000 * 60);
+                        rv = ERROR_NONE;
+                    }
+                }
+                else
+                {
+                    LOGLN0((LOG_ERROR, LOGS "tcp connect failed, retry after "
+                            "1 min sleep", LOGP));
+                    usleep(1000 * 1000 * 60);
+                    rv = ERROR_NONE;
+                }
             }
             else
             {
-                LOGLN0((LOG_ERROR, LOGS "tcp connect failed", LOGP));
+                LOGLN0((LOG_ERROR, LOGS "gethostbyname failed", LOGP));
             }
+            close(sck);
         }
         else
         {
-            LOGLN0((LOG_ERROR, LOGS "gethostbyname failed", LOGP));
+            LOGLN0((LOG_ERROR, LOGS "tcp socket create failed", LOGP));
         }
-        close(sck);
-    }
-    else
-    {
-        LOGLN0((LOG_ERROR, LOGS "tcp socket create failed", LOGP));
+        if (rv != 0)
+        {
+            break;
+        }
     }
     return rv;
 }
@@ -334,7 +356,7 @@ main_modbus(void)
     modbus_t* ctx;
     modbus_error_recovery_mode er_mode;
 
-    rv = 1;
+    rv = ERROR_FATAL;
     buffers = (struct buffers_t*)malloc(sizeof(struct buffers_t));
     if (buffers != NULL)
     {
@@ -382,7 +404,7 @@ main_fgbg(struct settings_info* settings)
     int rv;
     int error;
 
-    rv = 1;
+    rv = ERROR_FATAL;
     if (settings->daemonize)
     {
         error = fork();
@@ -407,7 +429,7 @@ main_fgbg(struct settings_info* settings)
         else if (error > 0)
         { /* parent */
             printf("start daemon with pid %d\n", error);
-            rv = 0;
+            rv = ERROR_NONE;
         }
         else
         {
@@ -430,7 +452,7 @@ main_settings(int argc, char** argv)
     int rv;
     struct settings_info* settings;
 
-    rv = 1;
+    rv = ERROR_FATAL;
     settings = (struct settings_info*)calloc(1, sizeof(struct settings_info));
     if (settings != NULL)
     {
@@ -441,7 +463,7 @@ main_settings(int argc, char** argv)
         else
         {
             printf_help(argc, argv);
-            rv = 0;
+            rv = ERROR_NONE;
         }
         free(settings);
     }
@@ -454,7 +476,7 @@ main(int argc, char** argv)
 {
     int rv;
 
-    rv = 1;
+    rv = ERROR_FATAL;
     if (signal(SIGINT, sig_int) != SIG_ERR)
     {
         if (signal(SIGTERM, sig_int) != SIG_ERR)
