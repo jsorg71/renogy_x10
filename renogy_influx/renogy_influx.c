@@ -46,6 +46,7 @@ struct buffers_t
 #define ERROR_NONE      0
 #define ERROR_FATAL     1
 #define ERROR_CONNECT   2
+#define ERROR_SHUTDOWN  3
 
 /*****************************************************************************/
 static void
@@ -173,12 +174,14 @@ main_send_recv_loop(struct buffers_t* buffers, int sck, int end_send_time)
                         buffers->buffer_in));
                 break;
             }
-            LOGLN0((LOG_ERROR, LOGS "select failed", LOGP));
-            break;
+            error = errno;
+            LOGLN0((LOG_INFO, LOGS "select failed, errstr [%s] errno [%d]",
+                    LOGP, strerror(error), error));
         }
         if (FD_ISSET(g_term_pipe[0], &rfds))
         {
-            LOGLN0((LOG_INFO, LOGS "term set", LOGP));
+            LOGLN0((LOG_INFO, LOGS "term set, shutting down", LOGP));
+            rv = ERROR_SHUTDOWN;
             break;
         }
         if (FD_ISSET(sck, &rfds))
@@ -271,6 +274,10 @@ main_modbus_loop(struct buffers_t* buffers, modbus_t* ctx, int sck)
         rv = main_send_recv_loop(buffers, sck, end_send_time);
         if (rv != ERROR_NONE)
         {
+            if (rv == ERROR_SHUTDOWN)
+            {
+                LOGLN0((LOG_INFO, LOGS "shutting down", LOGP));
+            }
             break;
         }
     }
@@ -279,7 +286,7 @@ main_modbus_loop(struct buffers_t* buffers, modbus_t* ctx, int sck)
 
 /*****************************************************************************/
 static int
-main_connect(struct buffers_t* buffers, modbus_t* ctx)
+main_connect_loop(struct buffers_t* buffers, modbus_t* ctx)
 {
     int sck;
     int rv;
@@ -338,8 +345,12 @@ main_connect(struct buffers_t* buffers, modbus_t* ctx)
         {
             LOGLN0((LOG_ERROR, LOGS "tcp socket create failed", LOGP));
         }
-        if (rv != 0)
+        if (rv != ERROR_NONE)
         {
+            if (rv == ERROR_SHUTDOWN)
+            {
+                LOGLN0((LOG_INFO, LOGS "shutting down", LOGP));
+            }
             break;
         }
     }
@@ -374,7 +385,7 @@ main_modbus(void)
             if (error != -1)
             {
                 LOGLN0((LOG_INFO, LOGS "connection ok", LOGP));
-                rv = main_connect(buffers, ctx);
+                rv = main_connect_loop(buffers, ctx);
             }
             else
             {
@@ -392,6 +403,10 @@ main_modbus(void)
     else
     {
         LOGLN0((LOG_ERROR, LOGS "malloc failed", LOGP));
+    }
+    if (rv == ERROR_SHUTDOWN)
+    {
+        LOGLN0((LOG_INFO, LOGS "shutting down", LOGP));
     }
     return rv;
 }

@@ -26,6 +26,7 @@ static const char g_log_pre[][8] =
 static int g_log_fd = -1;
 static int g_log_flags = LOG_FLAG_STDOUT;
 static char g_log_filename[256];
+static char g_log_filename_last[256] = "/tmp/renogy_influx_last.log";
 
 struct log_line_t
 {
@@ -84,7 +85,8 @@ log_deinit(void)
     if (g_log_fd != -1)
     {
         close(g_log_fd);
-        unlink(g_log_filename);
+        unlink(g_log_filename_last);
+        rename(g_log_filename, g_log_filename_last);
     }
     return 0;
 }
