@@ -163,7 +163,14 @@ main_send_recv_loop(struct buffers_t* buffers, int sck, int end_send_time)
             if (error == 0)
             {
                 /* timeout */
-                if (strstr(buffers->buffer_in, "204 No Content") != NULL)
+                if (buffers->buffer_in[0] == 0)
+                {
+                    /* no return, ok ? */
+                    LOGLN0((LOG_INFO, LOGS "no return ?", LOGP));
+                    rv = ERROR_NONE;
+                    break;
+                }
+                else if (strstr(buffers->buffer_in, "204 No Content") != NULL)
                 {
                     /* all ok */
                     LOGLN10((LOG_INFO, LOGS "ok", LOGP));
