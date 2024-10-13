@@ -46,7 +46,8 @@ struct buffers_t
 #define ERROR_NONE      0
 #define ERROR_FATAL     1
 #define ERROR_CONNECT   2
-#define ERROR_SHUTDOWN  3
+#define ERROR_MODBUS    3
+#define ERROR_SHUTDOWN  4
 
 /*****************************************************************************/
 static void
@@ -259,6 +260,7 @@ main_modbus_loop(struct buffers_t* buffers, modbus_t* ctx, int sck)
         if (error == -1)
         {
             LOGLN0((LOG_ERROR, LOGS "modbus_read_registers failed", LOGP));
+            rv = ERROR_MODBUS;
             break;
         }
         value = tab_rp_registers[0];
@@ -344,7 +346,10 @@ main_connect_loop(struct buffers_t* buffers, modbus_t* ctx)
             }
             else
             {
-                LOGLN0((LOG_ERROR, LOGS "gethostbyname failed", LOGP));
+                LOGLN0((LOG_ERROR, LOGS "gethostbyname failed, retry after "
+                        "1 min sleep", LOGP));
+                usleep(1000 * 1000 * 60);
+                rv = ERROR_NONE;
             }
             close(sck);
         }
@@ -378,32 +383,47 @@ main_modbus(void)
     buffers = (struct buffers_t*)malloc(sizeof(struct buffers_t));
     if (buffers != NULL)
     {
-        ctx = modbus_new_rtu RENOGY_SERIAL_INFO;
-        if (ctx != NULL)
+        for (;;)
         {
-            LOGLN0((LOG_INFO, LOGS "modbus_new_rtu ok", LOGP));
-            er_mode = MODBUS_ERROR_RECOVERY_LINK |
-                      MODBUS_ERROR_RECOVERY_PROTOCOL;
-            error = modbus_set_error_recovery(ctx, er_mode);
-            LOGLN0((LOG_INFO, LOGS "modbus_set_error_recovery error %d",
-                    LOGP, error));
-            modbus_set_slave(ctx, g_renogy_id);
-            error = modbus_connect(ctx);
-            if (error != -1)
+            rv = ERROR_FATAL;
+            ctx = modbus_new_rtu RENOGY_SERIAL_INFO;
+            if (ctx != NULL)
             {
-                LOGLN0((LOG_INFO, LOGS "connection ok", LOGP));
-                rv = main_connect_loop(buffers, ctx);
+                LOGLN0((LOG_INFO, LOGS "modbus_new_rtu ok", LOGP));
+                er_mode = MODBUS_ERROR_RECOVERY_LINK |
+                          MODBUS_ERROR_RECOVERY_PROTOCOL;
+                error = modbus_set_error_recovery(ctx, er_mode);
+                LOGLN0((LOG_INFO, LOGS "modbus_set_error_recovery error %d",
+                        LOGP, error));
+                modbus_set_slave(ctx, g_renogy_id);
+                error = modbus_connect(ctx);
+                if (error != -1)
+                {
+                    LOGLN0((LOG_INFO, LOGS "connection ok", LOGP));
+                    rv = main_connect_loop(buffers, ctx);
+                }
+                else
+                {
+                    LOGLN0((LOG_ERROR, LOGS "connection failed [%s]", LOGP,
+                            modbus_strerror(errno)));
+                }
+                modbus_free(ctx);
             }
             else
             {
-                LOGLN0((LOG_ERROR, LOGS "connection failed [%s]", LOGP,
-                        modbus_strerror(errno)));
+                LOGLN0((LOG_ERROR, LOGS "modbus_new_rtu failed", LOGP));
             }
-            modbus_free(ctx);
-        }
-        else
-        {
-            LOGLN0((LOG_ERROR, LOGS "modbus_new_rtu failed", LOGP));
+            if (rv == ERROR_MODBUS)
+            {
+                LOGLN0((LOG_INFO, LOGS "modbus issue, retry after "
+                        "1 min sleep", LOGP));
+                usleep(1000 * 1000 * 60);
+                rv = ERROR_NONE;
+            }
+            if (rv != ERROR_NONE)
+            {
+                break;
+            }
         }
         free(buffers);
     }
