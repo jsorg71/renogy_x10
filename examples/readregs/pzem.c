@@ -58,6 +58,11 @@ main(int argc, char** argv)
     {
         if (strcmp(argv[index], "--id") == 0)
         {
+            if (index + 1 >= argc)
+            {
+                print_help(argv[0]);
+                return 1;
+            }
             index++;
             pzem_id = atoi(argv[index]);
         }
@@ -67,6 +72,11 @@ main(int argc, char** argv)
         }
         else if (strcmp(argv[index], "--loop") == 0)
         {
+            if (index + 2 >= argc)
+            {
+                print_help(argv[0]);
+                return 1;
+            }
             index++;
             loop = atoi(argv[index]);
             index++;
@@ -82,11 +92,21 @@ main(int argc, char** argv)
         }
         else if (strcmp(argv[index], "--set-id") == 0)
         {
+            if (index + 1 >= argc)
+            {
+                print_help(argv[0]);
+                return 1;
+            }
             index++;
             set_id = atoi(argv[index]);
         }
         else if (strcmp(argv[index], "--set-range") == 0)
         {
+            if (index + 1 >= argc)
+            {
+                print_help(argv[0]);
+                return 1;
+            }
             index++;
             set_range = atoi(argv[index]);
         }
