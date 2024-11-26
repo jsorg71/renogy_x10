@@ -48,7 +48,7 @@ main(int argc, char** argv)
     }
     pzem_id = 1;
     debug = 0;
-    loop = 1;
+    loop = 0;
     loop_delay = 0;
     show_slave_params = 0;
     reset_energy = 0;
