@@ -10,12 +10,12 @@
 static int
 print_help(const char* app)
 {
-    printf("%s --id modbus address      - The modbus address.\n", app);
+    printf("%s --id id                  - The modbus address.\n", app);
     printf("   --debug                  - Set debug mode.\n");
     printf("   --loop loopnum loopdelay - Set number of loops and delay in seconds.\n");
     printf("   --slave                  - Show slave parameters.\n");
     printf("   --reset-energy           - Reset the energy(Wh).\n");
-    printf("   --set-id id              - Set modbus id.\n");
+    printf("   --set-id id              - Set modbus address.\n");
     printf("   --set-range code         - Set the shun type.\n");
     return 0;
 }
