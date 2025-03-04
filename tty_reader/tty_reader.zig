@@ -1,0 +1,373 @@
+
+const std = @import("std");
+const log = @import("log.zig");
+const hexdump = @import("hexdump.zig");
+const net = std.net;
+const posix = std.posix;
+const c = @cImport(
+{
+    @cInclude("modbus/modbus.h");
+    @cInclude("toml.h");
+});
+
+var g_allocator: std.mem.Allocator = std.heap.c_allocator;
+var g_term: [2]i32 = .{-1, -1};
+const g_tty_name_max_length = 128;
+const g_listen_socket = "/tmp/tty_reader.socket";
+
+const tty_id_info_t = struct
+{
+    id: u8 = 0,
+    read_address: u16 = 0,
+    read_count: u8 = 0,
+    read_input_address: u16 = 0,
+    read_input_count: u8 = 0,
+};
+
+const tty_peer_info_t = struct
+{
+    sck: i32 = -1,
+};
+
+const tty_info_t = struct
+{
+    sck: i32 = -1,
+    debug: bool = false,
+    tty: [g_tty_name_max_length]u8 = .{0} ** g_tty_name_max_length,
+    id_list: std.ArrayList(tty_id_info_t) = undefined,
+    peer_list: std.ArrayList(tty_peer_info_t) = undefined,
+    ctx: *c.modbus_t = undefined,
+    fn init(self: *tty_info_t) !void
+    {
+        self.id_list = std.ArrayList(tty_id_info_t).init(g_allocator);
+        self.peer_list = std.ArrayList(tty_peer_info_t).init(g_allocator);
+    }
+    fn deinit(self: *tty_info_t) void
+    {
+        self.id_list.deinit();
+        self.peer_list.deinit();
+    }
+};
+
+//*****************************************************************************
+fn sleep(mstime: i32) !void
+{
+    var polls: [1]posix.pollfd = undefined;
+    polls[0].fd = g_term[0];
+    polls[0].events = posix.POLL.IN;
+    polls[0].revents = 0;
+    const active_polls = polls[0..1];
+    const poll_rv = try posix.poll(active_polls, mstime);
+    if (poll_rv > 0)
+    {
+        if ((active_polls[0].revents & posix.POLL.IN) != 0)
+        {
+            return error.Unexpected;
+        }
+    }
+}
+
+//*****************************************************************************
+fn term_sig(_: c_int) callconv(.C) void
+{
+    const msg: [4]u8 = .{ 'i', 'n', 't', 0 };
+    _ = posix.write(g_term[1], msg[0..4]) catch return;
+}
+
+//*****************************************************************************
+fn pipe_sig(_: c_int) callconv(.C) void
+{
+}
+
+//*****************************************************************************
+fn setup_signals() !void
+{
+    g_term = try posix.pipe();
+    var sa: posix.Sigaction = undefined;
+    sa.mask = posix.empty_sigset;
+    sa.flags = 0;
+    sa.handler = .{ .handler = term_sig };
+    try posix.sigaction(posix.SIG.INT, &sa, null);
+    try posix.sigaction(posix.SIG.TERM, &sa, null);
+    sa.handler = .{ .handler = pipe_sig };
+    try posix.sigaction(posix.SIG.PIPE, &sa, null);
+}
+
+//*****************************************************************************
+fn cleanup_signals() void
+{
+    posix.close(g_term[0]);
+    posix.close(g_term[1]);
+}
+
+//*****************************************************************************
+fn load_tty_config(file_name: []const u8) !*c.toml_table_t
+{
+    var file = try std.fs.cwd().openFile(file_name, .{});
+    defer file.close();
+    const file_stat = try file.stat();
+    const file_size: usize = @intCast(file_stat.size);
+    var buf_reader = std.io.bufferedReader(file.reader());
+    var in_stream = buf_reader.reader();
+    var buf: []u8 = undefined;
+    buf = try g_allocator.alloc(u8, file_size + 1);
+    defer g_allocator.free(buf);
+    var errbuf: []u8 = undefined;
+    errbuf = try g_allocator.alloc(u8, 1024);
+    defer g_allocator.free(errbuf);
+    const bytes_read = try in_stream.read(buf);
+    try log.logln(log.LogLevel.info, @src(),
+            "file_size {} bytes read {}", .{file_size, bytes_read});
+    if (bytes_read > file_size)
+    {
+        return error.Unexpected;
+    }
+    buf[bytes_read] = 0;
+    const table = c.toml_parse(buf.ptr, errbuf.ptr, 1024);
+    if (table) |atable|
+    {
+        try log.logln(log.LogLevel.info, @src(), "toml_parse ok", .{});
+        return atable;
+    }
+    try log.logln(log.LogLevel.info, @src(), 
+            "toml_parse failed errbuf {s}", .{errbuf});
+    return error.Unexpected;
+}
+
+//*****************************************************************************
+fn setup_tty_info(info: *tty_info_t) !void
+{
+    const table = try load_tty_config("tty0.toml");
+    defer c.toml_free(table);
+    var index: c_int = 0;
+    while (c.toml_key_in(table, index)) |akey| : (index += 1)
+    {
+        const akey_slice = std.mem.sliceTo(akey, 0);
+        if (std.mem.eql(u8, akey_slice, "main"))
+        {
+            const ltable = c.toml_table_in(table, akey);
+            var lindex: c_int = 0;
+            while (c.toml_key_in(ltable, lindex)) |alkey| : (lindex += 1)
+            {
+                const alkey_slice = std.mem.sliceTo(alkey, 0);
+                if (std.mem.eql(u8, alkey_slice, "tty"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        @memset(&info.tty, 0);
+                        std.mem.copyForwards(u8, &info.tty,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "debug"))
+                {
+                    const val = c.toml_bool_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        info.debug = val.u.b != 0;
+                    }
+                }
+            }
+        }
+        else if ((akey_slice.len > 1) and (akey_slice[0] == 'i') and
+                (akey_slice[1] == 'd'))
+        {
+            var item: tty_id_info_t = std.mem.zeroInit(tty_id_info_t, .{});
+            item.id = try std.fmt.parseInt(u8, akey_slice[2..], 10);
+            const ltable = c.toml_table_in(table, akey);
+            var lindex: c_int = 0;
+            while (c.toml_key_in(ltable, lindex)) |alkey| : (lindex += 1)
+            {
+                const alkey_slice = std.mem.sliceTo(alkey, 0);
+                if (std.mem.eql(u8, alkey_slice, "read_address"))
+                {
+                    const val = c.toml_int_in(ltable, alkey_slice);
+                    item.read_address =
+                            if (val.ok != 0) @intCast(val.u.i) else 0;
+                }
+                else if (std.mem.eql(u8, alkey_slice, "read_count"))
+                {
+                    const val = c.toml_int_in(ltable, alkey_slice);
+                    item.read_count =
+                            if (val.ok != 0) @intCast(val.u.i) else 0;
+                }
+                else if (std.mem.eql(u8, alkey_slice, "read_input_address"))
+                {
+                    const val = c.toml_int_in(ltable, alkey_slice);
+                    item.read_input_address =
+                            if (val.ok != 0) @intCast(val.u.i) else 0;
+                }
+                else if (std.mem.eql(u8, alkey_slice, "read_input_count"))
+                {
+                    const val = c.toml_int_in(ltable, alkey_slice);
+                    item.read_input_count =
+                            if (val.ok != 0) @intCast(val.u.i) else 0;
+                }
+            }
+            try info.id_list.append(item);
+        }
+    }
+}
+
+//*****************************************************************************
+fn print_tty_info(info: *tty_info_t) !void
+{
+    try log.logln(log.LogLevel.info, @src(),
+            "tty info: tty_name [{s}] debug [{}]", .{info.tty, info.debug});
+    try log.logln(log.LogLevel.info, @src(),
+            "  got [{}] item to monitor", .{info.id_list.items.len});
+    for (0..info.id_list.items.len) |index|
+    {
+        const item: tty_id_info_t = info.id_list.items[index];
+        try log.logln(log.LogLevel.info, @src(),
+                "    index {} item id {} address {} count {} " ++
+                "input address {} input count {}",
+                .{index, item.id, item.read_address, item.read_count,
+                item.read_input_address, item.read_input_count});
+    }
+}
+
+//*****************************************************************************
+fn process_tty_info_list(info: *tty_info_t) !void
+{
+    for (info.id_list.items) |aitem|
+    {
+        var err = c.modbus_set_slave(info.ctx, aitem.id);
+        try log.logln(log.LogLevel.info, @src(),
+                "set slave id {} err {}",
+                .{aitem.id, err});
+        if (err != 0) return error.Unexpected;
+        if (aitem.read_count > 0)
+        {
+            var regs: [16]u16 = undefined;
+            const count =
+                    if (aitem.read_count < 16) aitem.read_count else 16;
+            err = c.modbus_read_registers(info.ctx, aitem.read_address,
+                    count, &regs);
+            try log.logln(log.LogLevel.info, @src(),
+                    "modbus_read_registers read address {} err {}",
+                    .{aitem.read_address, err});
+            if (err != count) return error.Unexpected;
+            const jay1 = regs[0..count];
+            var jay: []u8 = undefined;
+            jay.ptr = @ptrCast(jay1.ptr);
+            jay.len = jay1.len * 2;
+            try hexdump.printHexDump(0, jay);
+            if (aitem.id == 1 and aitem.read_address == 257)
+            {
+                const num: f32 = @floatFromInt(regs[0]);
+                const den: f32 = 10.0;
+                try log.logln(log.LogLevel.info, @src(),
+                    "id 1 voltage {d:2.3}", .{@divExact(num, den)});
+            }
+            try sleep(1000);
+        }
+        if (aitem.read_input_count > 0)
+        {
+            var regs: [16]u16 = undefined;
+            const count = if (aitem.read_input_count < 16)
+                    aitem.read_input_count else 16;
+            err = c.modbus_read_input_registers(info.ctx,
+                    aitem.read_input_address, count, &regs);
+            try log.logln(log.LogLevel.info, @src(),
+                    "modbus_read_input_registers read address {} err {}",
+                    .{aitem.read_input_address, err});
+            if (err != count) return error.Unexpected;
+            const jay1 = regs[0..count];
+            var jay: []u8 = undefined;
+            jay.ptr = @ptrCast(jay1.ptr);
+            jay.len = jay1.len * 2;
+            try hexdump.printHexDump(0, jay);
+            if (aitem.id == 3 and aitem.read_input_address == 0)
+            {
+                const num: f32 = @floatFromInt(regs[0]);
+                const den: f32 = 100.0;
+                try log.logln(log.LogLevel.info, @src(),
+                    "id 3 voltage {d:2.3}", .{@divExact(num, den)});
+            }
+            if (aitem.id == 6 and aitem.read_input_address == 0)
+            {
+                const num: f32 = @floatFromInt(regs[0]);
+                const den: f32 = 100.0;
+                try log.logln(log.LogLevel.info, @src(),
+                    "id 6 voltage {d:2.3}", .{@divExact(num, den)});
+            }
+            try sleep(1000);
+        }
+    }
+}
+
+//*****************************************************************************
+fn process_tty_info(info: *tty_info_t) !void
+{
+    try log.logln(log.LogLevel.info, @src(), "", .{});
+    const er_mode: c.modbus_error_recovery_mode =
+            c.MODBUS_ERROR_RECOVERY_LINK | c.MODBUS_ERROR_RECOVERY_PROTOCOL;
+    var err = c.modbus_set_error_recovery(info.ctx, er_mode);
+    if (err != 0) return error.Unexpected;
+    var response_sec: u32 = 0;
+    var response_usec: u32 = 0;
+    err = c.modbus_get_response_timeout(info.ctx,
+            &response_sec, &response_usec);
+    if (err != 0) return error.Unexpected;
+    try log.logln(log.LogLevel.info, @src(),
+            "response_sec {} response_usec {}",
+            .{response_sec, response_usec});
+    err = c.modbus_connect(info.ctx);
+    try log.logln(log.LogLevel.info, @src(), "connect err {}", .{err});
+    if (err != 0) return error.Unexpected;
+    err = c.modbus_set_debug(info.ctx, @intFromBool(info.debug));
+    if (err != 0) return error.Unexpected;
+
+    while (true)
+    {
+        try process_tty_info_list(info);
+    }
+}
+
+//*****************************************************************************
+pub fn main() !void
+{
+    // setup logging
+    try log.init(&g_allocator, log.LogLevel.debug);
+    defer log.deinit();
+    // setup signals
+    try setup_signals();
+    defer cleanup_signals();
+    try log.logln(log.LogLevel.info, @src(), "signals init ok", .{});
+    // setup tty_info
+    var tty_info: tty_info_t = std.mem.zeroInit(tty_info_t, .{});
+    try tty_info.init();
+    defer tty_info.deinit();
+    try setup_tty_info(&tty_info);
+    try print_tty_info(&tty_info);
+    // setup listen socket
+    posix.unlink(g_listen_socket) catch |err|
+            if (err != error.FileNotFound) return err;
+    const tpe: u32 = posix.SOCK.STREAM;
+    var address = try net.Address.initUnix(g_listen_socket);
+    tty_info.sck = try posix.socket(address.any.family, tpe, 0);
+    const address_len = address.getOsSockLen();
+    try posix.bind(tty_info.sck, &address.any, address_len);
+    try posix.listen(tty_info.sck, 2);
+    defer posix.close(tty_info.sck);
+    // setup modbus
+    const cptr = std.mem.sliceTo(&tty_info.tty, 0);
+    const ctx = c.modbus_new_rtu(cptr.ptr, 9600, 'N', 8, 1);
+    if (ctx) |actx|
+    {
+        defer c.modbus_free(actx);
+        try log.logln(log.LogLevel.info, @src(),
+                "modbus_new_rtu ok for {s}", .{tty_info.tty});
+        tty_info.ctx = actx;
+        try process_tty_info(&tty_info);
+    }
+    else
+    {
+        try log.logln(log.LogLevel.info, @src(),
+                "modbus_new_rtu failed for {s}", .{tty_info.tty});
+    }
+    try log.logln(log.LogLevel.info, @src(), "exit main", .{});
+}
