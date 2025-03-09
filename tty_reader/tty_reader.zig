@@ -223,7 +223,7 @@ fn setup_tty_info(info: *tty_info_t) !void
         else if ((akey_slice.len > 1) and (akey_slice[0] == 'i') and
                 (akey_slice[1] == 'd'))
         {
-            var item: tty_id_info_t = std.mem.zeroInit(tty_id_info_t, .{});
+            var item: tty_id_info_t = .{};
             item.id = try std.fmt.parseInt(u8, akey_slice[2..], 10);
             const ltable = c.toml_table_in(table, akey);
             try err_if(ltable == null, TtyError.TomlTableInFailed);
@@ -479,7 +479,7 @@ pub fn main() !void
     defer cleanup_signals();
     try log.logln(log.LogLevel.info, @src(), "signals init ok", .{});
     // setup tty_info
-    var tty_info: tty_info_t = std.mem.zeroInit(tty_info_t, .{});
+    var tty_info: tty_info_t = .{};
     try tty_info.init();
     defer tty_info.deinit();
     try setup_tty_info(&tty_info);
