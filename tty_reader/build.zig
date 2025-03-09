@@ -22,6 +22,9 @@ pub fn build(b: *std.Build) void
     tty_reader.root_module.addImport("log", b.createModule(.{
         .root_source_file = b.path("common/log.zig"),
     }));
+    tty_reader.root_module.addImport("parse", b.createModule(.{
+        .root_source_file = b.path("common/parse.zig"),
+    }));
     setExtraLibraryPaths(tty_reader, target);
     b.installArtifact(tty_reader);
 }
