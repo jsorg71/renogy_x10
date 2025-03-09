@@ -1,0 +1,3 @@
+[submodule "tty_reader/common"]
+	path = tty_reader/common
+	url = https://github.com/rdbits4u/common.git

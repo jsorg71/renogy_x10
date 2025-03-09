@@ -1,7 +1,7 @@
 
 const std = @import("std");
-const log = @import("log.zig");
-const hexdump = @import("hexdump.zig");
+const log = @import("log");
+const hexdump = @import("hexdump");
 const net = std.net;
 const posix = std.posix;
 const c = @cImport(
@@ -87,10 +87,10 @@ fn setup_signals() !void
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
     sa.handler = .{ .handler = term_sig };
-    try posix.sigaction(posix.SIG.INT, &sa, null);
-    try posix.sigaction(posix.SIG.TERM, &sa, null);
+    posix.sigaction(posix.SIG.INT, &sa, null);
+    posix.sigaction(posix.SIG.TERM, &sa, null);
     sa.handler = .{ .handler = pipe_sig };
-    try posix.sigaction(posix.SIG.PIPE, &sa, null);
+    posix.sigaction(posix.SIG.PIPE, &sa, null);
 }
 
 //*****************************************************************************
@@ -174,7 +174,7 @@ fn setup_tty_info(info: *tty_info_t) !void
         else if ((akey_slice.len > 1) and (akey_slice[0] == 'i') and
                 (akey_slice[1] == 'd'))
         {
-            var item: tty_id_info_t = std.mem.zeroInit(tty_id_info_t, .{});
+            var item: tty_id_info_t = .{};
             item.id = try std.fmt.parseInt(u8, akey_slice[2..], 10);
             const ltable = c.toml_table_in(table, akey);
             var lindex: c_int = 0;
@@ -338,7 +338,7 @@ pub fn main() !void
     defer cleanup_signals();
     try log.logln(log.LogLevel.info, @src(), "signals init ok", .{});
     // setup tty_info
-    var tty_info: tty_info_t = std.mem.zeroInit(tty_info_t, .{});
+    var tty_info: tty_info_t = .{};
     try tty_info.init();
     defer tty_info.deinit();
     try setup_tty_info(&tty_info);
