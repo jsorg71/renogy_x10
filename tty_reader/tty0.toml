@@ -1,7 +1,10 @@
 
 [main]
 tty="/dev/ttyUSB0"
-debug=false
+modbus_debug=false
+item_mstime=1000
+list_mstime=10000
+listen_socket="/tmp/tty_reader.socket"
 
 [id1]
 read_address=257

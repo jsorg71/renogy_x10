@@ -3,25 +3,21 @@ const std = @import("std");
 const log = @import("log");
 const hexdump = @import("hexdump");
 const parse = @import("parse");
+const toml  = @import("tty_toml.zig");
 const net = std.net;
 const posix = std.posix;
 const c = @cImport(
 {
     @cInclude("modbus/modbus.h");
-    @cInclude("toml.h");
 });
 
-var g_allocator: std.mem.Allocator = std.heap.c_allocator;
+pub var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
 const g_tty_name_max_length = 128;
-const g_listen_socket = "/tmp/tty_reader.socket";
 
 pub const TtyError = error
 {
     TermSet,
-    FileSizeChanged,
-    TomlParseFailed,
-    TomlTableInFailed,
     ModbusSetSlaveFailed,
     ModbusReadRegistersFailed,
     ModbusReadInputRegistersFailed,
@@ -31,8 +27,10 @@ pub const TtyError = error
     ModbusSetDebugFailed,
 };
 
+const DL = std.DoublyLinkedList(*parse.parse_t);
+
 //*****************************************************************************
-pub inline fn err_if(b: bool, err: TtyError) !void
+inline fn err_if(b: bool, err: TtyError) !void
 {
     if (b) return err else return;
 }
@@ -41,13 +39,13 @@ const tty_peer_info_t = struct // one for each client connected
 {
     delme: bool = false,
     sck: i32 = -1,
-    out_queue: std.DoublyLinkedList(*parse.parse_t) = undefined,
+    out_queue: DL = undefined,
     ins: *parse.parse_t = undefined,
 
     //*************************************************************************
     fn init(self: *tty_peer_info_t) !void
     {
-        self.out_queue = std.DoublyLinkedList(*parse.parse_t){};
+        self.out_queue = DL{};
         self.ins = try parse.create(&g_allocator, 64 * 1024);
     }
 
@@ -64,7 +62,7 @@ const tty_peer_info_t = struct // one for each client connected
 
 };
 
-const tty_id_info_t = struct // one for each device we are monitoring
+pub const tty_id_info_t = struct // one for each modbus device we are monitoring
 {
     id: u8 = 0,
     read_address: u16 = 0,
@@ -73,14 +71,19 @@ const tty_id_info_t = struct // one for each device we are monitoring
     read_input_count: u8 = 0,
 };
 
-const tty_info_t = struct // just one of these
+pub const tty_info_t = struct // just one of these
 {
     sck: i32 = -1, // listener
-    debug: bool = false,
+    modbus_debug: bool = false,
+    item_mstime: i64 = 0,
+    list_mstime: i64 = 0,
     tty: [g_tty_name_max_length]u8 = .{0} ** g_tty_name_max_length,
+    listen_socket: [g_tty_name_max_length]u8 = .{0} ** g_tty_name_max_length,
     id_list: std.ArrayList(tty_id_info_t) = undefined,
     peer_list: std.ArrayList(tty_peer_info_t) = undefined,
     ctx: *c.modbus_t = undefined,
+    id_list_index: usize = 0,
+    id_list_sub_index: usize = 0,
 
     //*************************************************************************
     fn init(self: *tty_info_t) !void
@@ -100,6 +103,34 @@ const tty_info_t = struct // just one of these
         self.peer_list.deinit();
     }
 
+    //*************************************************************************
+    fn get_next_id_info(self: *tty_info_t) ?*tty_id_info_t
+    {
+        if (self.id_list_sub_index > 1)
+        {
+            self.id_list_index += 1;
+            self.id_list_sub_index = 0;
+        }
+        if (self.id_list_index >= self.id_list.items.len)
+        {
+            self.id_list_index = 0;
+            self.id_list_sub_index = 0;
+            return null;
+        }
+        const item = &self.id_list.items[self.id_list_index];
+        if (self.id_list_sub_index == 0 and item.read_count > 0)
+        {
+            self.id_list_sub_index += 1;
+            return item;
+        }
+        if (self.id_list_sub_index == 1 and item.read_input_count > 0)
+        {
+            self.id_list_sub_index += 1;
+            return item;
+        }
+        self.id_list_sub_index += 1;
+        return get_next_id_info(self);
+    }
 };
 
 //*****************************************************************************
@@ -138,10 +169,10 @@ fn setup_signals() !void
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
     sa.handler = .{ .handler = term_sig };
-    try posix.sigaction(posix.SIG.INT, &sa, null);
-    try posix.sigaction(posix.SIG.TERM, &sa, null);
+    posix.sigaction(posix.SIG.INT, &sa, null);
+    posix.sigaction(posix.SIG.TERM, &sa, null);
     sa.handler = .{ .handler = pipe_sig };
-    try posix.sigaction(posix.SIG.PIPE, &sa, null);
+    posix.sigaction(posix.SIG.PIPE, &sa, null);
 }
 
 //*****************************************************************************
@@ -152,120 +183,14 @@ fn cleanup_signals() void
 }
 
 //*****************************************************************************
-fn load_tty_config(file_name: []const u8) !*c.toml_table_t
-{
-    var file = try std.fs.cwd().openFile(file_name, .{});
-    defer file.close();
-    const file_stat = try file.stat();
-    const file_size: usize = @intCast(file_stat.size);
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var in_stream = buf_reader.reader();
-    var buf: []u8 = undefined;
-    buf = try g_allocator.alloc(u8, file_size + 1);
-    defer g_allocator.free(buf);
-    var errbuf: []u8 = undefined;
-    errbuf = try g_allocator.alloc(u8, 1024);
-    defer g_allocator.free(errbuf);
-    const bytes_read = try in_stream.read(buf);
-    try log.logln(log.LogLevel.info, @src(),
-            "file_size {} bytes read {}", .{file_size, bytes_read});
-    try err_if(bytes_read > file_size, TtyError.FileSizeChanged);
-    buf[bytes_read] = 0;
-    const table = c.toml_parse(buf.ptr, errbuf.ptr, 1024);
-    if (table) |atable|
-    {
-        try log.logln(log.LogLevel.info, @src(), "toml_parse ok", .{});
-        return atable;
-    }
-    try log.logln(log.LogLevel.info, @src(), 
-            "toml_parse failed errbuf {s}", .{errbuf});
-    return TtyError.TomlParseFailed;
-}
-
-//*****************************************************************************
-fn setup_tty_info(info: *tty_info_t) !void
-{
-    const table = try load_tty_config("tty0.toml");
-    defer c.toml_free(table);
-    var index: c_int = 0;
-    while (c.toml_key_in(table, index)) |akey| : (index += 1)
-    {
-        const akey_slice = std.mem.sliceTo(akey, 0);
-        if (std.mem.eql(u8, akey_slice, "main"))
-        {
-            const ltable = c.toml_table_in(table, akey);
-            try err_if(ltable == null, TtyError.TomlTableInFailed);
-            var lindex: c_int = 0;
-            while (c.toml_key_in(ltable, lindex)) |alkey| : (lindex += 1)
-            {
-                const alkey_slice = std.mem.sliceTo(alkey, 0);
-                if (std.mem.eql(u8, alkey_slice, "tty"))
-                {
-                    const val = c.toml_string_in(ltable, alkey_slice);
-                    if (val.ok != 0)
-                    {
-                        @memset(&info.tty, 0);
-                        std.mem.copyForwards(u8, &info.tty,
-                                std.mem.sliceTo(val.u.s, 0));
-                        std.c.free(val.u.s);
-                    }
-                }
-                else if (std.mem.eql(u8, alkey_slice, "debug"))
-                {
-                    const val = c.toml_bool_in(ltable, alkey_slice);
-                    if (val.ok != 0)
-                    {
-                        info.debug = val.u.b != 0;
-                    }
-                }
-            }
-        }
-        else if ((akey_slice.len > 1) and (akey_slice[0] == 'i') and
-                (akey_slice[1] == 'd'))
-        {
-            var item: tty_id_info_t = .{};
-            item.id = try std.fmt.parseInt(u8, akey_slice[2..], 10);
-            const ltable = c.toml_table_in(table, akey);
-            try err_if(ltable == null, TtyError.TomlTableInFailed);
-            var lindex: c_int = 0;
-            while (c.toml_key_in(ltable, lindex)) |alkey| : (lindex += 1)
-            {
-                const alkey_slice = std.mem.sliceTo(alkey, 0);
-                if (std.mem.eql(u8, alkey_slice, "read_address"))
-                {
-                    const val = c.toml_int_in(ltable, alkey_slice);
-                    item.read_address =
-                            if (val.ok != 0) @intCast(val.u.i) else 0;
-                }
-                else if (std.mem.eql(u8, alkey_slice, "read_count"))
-                {
-                    const val = c.toml_int_in(ltable, alkey_slice);
-                    item.read_count =
-                            if (val.ok != 0) @intCast(val.u.i) else 0;
-                }
-                else if (std.mem.eql(u8, alkey_slice, "read_input_address"))
-                {
-                    const val = c.toml_int_in(ltable, alkey_slice);
-                    item.read_input_address =
-                            if (val.ok != 0) @intCast(val.u.i) else 0;
-                }
-                else if (std.mem.eql(u8, alkey_slice, "read_input_count"))
-                {
-                    const val = c.toml_int_in(ltable, alkey_slice);
-                    item.read_input_count =
-                            if (val.ok != 0) @intCast(val.u.i) else 0;
-                }
-            }
-            try info.id_list.append(item);
-        }
-    }
-}
-
-//*****************************************************************************
 fn print_tty_info(info: *tty_info_t) !void
 {
     try log.logln(log.LogLevel.info, @src(),
-            "tty info: tty_name [{s}] debug [{}]", .{info.tty, info.debug});
+            "tty info: tty_name [{s}] modbus_debug [{}]",
+            .{info.tty, info.modbus_debug});
+    try log.logln(log.LogLevel.info, @src(),
+            "  item_mstime [{}] list_mstime [{}]",
+            .{info.item_mstime, info.list_mstime});
     try log.logln(log.LogLevel.info, @src(),
             "  got [{}] item to monitor", .{info.id_list.items.len});
     for (0..info.id_list.items.len) |index|
@@ -289,44 +214,83 @@ fn hexdump_slice(slice: []u16) !void
 }
 
 //*****************************************************************************
-fn process_tty_info_list(info: *tty_info_t) !void
+fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
 {
-    for (info.id_list.items) |aitem|
+    var err = c.modbus_set_slave(info.ctx, id_info.id);
+    try log.logln(log.LogLevel.info, @src(),
+            "set slave id {} err {}",
+            .{id_info.id, err});
+    try err_if(err != 0, TtyError.ModbusSetSlaveFailed);
+    if (info.id_list_sub_index == 1)
     {
-        var err = c.modbus_set_slave(info.ctx, aitem.id);
+        var regs: []u16 = undefined;
+        const count = id_info.read_count;
+        regs = try g_allocator.alloc(u16, count);
+        defer g_allocator.free(regs);
+        err = c.modbus_read_registers(info.ctx,
+                id_info.read_address, count, regs.ptr);
         try log.logln(log.LogLevel.info, @src(),
-                "set slave id {} err {}",
-                .{aitem.id, err});
-        try err_if(err != 0, TtyError.ModbusSetSlaveFailed);
-        if (aitem.read_count > 0)
+                "modbus_read_registers read address {} err {}",
+                .{id_info.read_address, err});
+        try err_if(err != count, TtyError.ModbusReadRegistersFailed);
+        try hexdump_slice(regs);
+        // add data to each peer
+        for (info.peer_list.items) |*aitem|
         {
-            var regs: []u16 = undefined;
-            const count = aitem.read_count;
-            regs = try g_allocator.alloc(u16, count);
-            defer g_allocator.free(regs);
-            err = c.modbus_read_registers(info.ctx,
-                    aitem.read_address, count, regs.ptr);
-            try log.logln(log.LogLevel.info, @src(),
-                    "modbus_read_registers read address {} err {}",
-                    .{aitem.read_address, err});
-            try err_if(err != count, TtyError.ModbusReadRegistersFailed);
-            try hexdump_slice(regs);
-            try sleep(1000);
+            const msg_size = 2 + 2 + 2 + 2 + 2 + 2 + count * 2;
+            var s = try parse.create(&g_allocator, msg_size);
+            errdefer s.delete();
+            s.out_u16_le(0); // msg id
+            s.out_u16_le(msg_size); // size
+            s.out_u16_le(0); // type
+            s.out_u16_le(id_info.id);
+            s.out_u16_le(id_info.read_address);
+            s.out_u16_le(id_info.read_count);
+            for (regs) |areg|
+            {
+                s.out_u16_le(areg);
+            }
+            s.offset = 0;
+            const node = try g_allocator.create(DL.Node);
+            errdefer g_allocator.destroy(node);
+            node.* = .{.data = s};
+            aitem.out_queue.append(node);
         }
-        if (aitem.read_input_count > 0)
+    }
+    else if (info.id_list_sub_index == 2)
+    {
+        var regs: []u16 = undefined;
+        const count = id_info.read_input_count;
+        regs = try g_allocator.alloc(u16, count);
+        defer g_allocator.free(regs);
+        err = c.modbus_read_input_registers(info.ctx,
+                id_info.read_input_address, count, regs.ptr);
+        try log.logln(log.LogLevel.info, @src(),
+                "modbus_read_input_registers read address {} err {}",
+                .{id_info.read_input_address, err});
+        try err_if(err != count, TtyError.ModbusReadInputRegistersFailed);
+        try hexdump_slice(regs);
+        // add data to each peer
+        for (info.peer_list.items) |*aitem|
         {
-            var regs: []u16 = undefined;
-            const count = aitem.read_input_count;
-            regs = try g_allocator.alloc(u16, count);
-            defer g_allocator.free(regs);
-            err = c.modbus_read_input_registers(info.ctx,
-                    aitem.read_input_address, count, regs.ptr);
-            try log.logln(log.LogLevel.info, @src(),
-                    "modbus_read_input_registers read address {} err {}",
-                    .{aitem.read_input_address, err});
-            try err_if(err != count, TtyError.ModbusReadInputRegistersFailed);
-            try hexdump_slice(regs);
-            try sleep(1000);
+            const msg_size = 2 + 2 + 2 + 2 + 2 + 2 + count * 2;
+            var s = try parse.create(&g_allocator, msg_size);
+            errdefer s.delete();
+            s.out_u16_le(0); // msg id
+            s.out_u16_le(msg_size); // size
+            s.out_u16_le(1); // type
+            s.out_u16_le(id_info.id);
+            s.out_u16_le(id_info.read_input_address);
+            s.out_u16_le(id_info.read_input_count);
+            for (regs) |areg|
+            {
+                s.out_u16_le(areg);
+            }
+            s.offset = 0;
+            const node = try g_allocator.create(DL.Node);
+            errdefer g_allocator.destroy(node);
+            node.* = .{.data = s};
+            aitem.out_queue.append(node);
         }
     }
 }
@@ -360,6 +324,7 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
                     if (outs.offset >= outs.data.len)
                     {
                         peer.out_queue.remove(anode);
+                        anode.data.delete();
                         g_allocator.destroy(anode);
                     }
                 }
@@ -402,8 +367,12 @@ fn process_tty_info(info: *tty_info_t) !void
     err = c.modbus_connect(info.ctx);
     try log.logln(log.LogLevel.info, @src(), "connect err {}", .{err});
     try err_if(err != 0, TtyError.ModbusConnectFailed);
-    err = c.modbus_set_debug(info.ctx, @intFromBool(info.debug));
+    err = c.modbus_set_debug(info.ctx, @intFromBool(info.modbus_debug));
     try err_if(err != 0, TtyError.ModbusSetDebugFailed);
+
+    var now: i64 = std.time.milliTimestamp();
+    var next_modbus_time: i64 = now;
+    var first_modbus_time: i64 = now;
 
     const max_polls = 32;
     var timeout: i32 = undefined;
@@ -411,7 +380,27 @@ fn process_tty_info(info: *tty_info_t) !void
     var poll_count: usize = undefined;
     while (true)
     {
-        timeout = 10; // -1;
+        now = std.time.milliTimestamp();
+        if (now >= next_modbus_time)
+        {
+            const id_info = info.get_next_id_info();
+            if (id_info) |aid_info|
+            {
+                next_modbus_time = now + info.item_mstime;
+                try process_tty_id_info(info, aid_info);
+            }
+            else
+            {
+                next_modbus_time = first_modbus_time + info.list_mstime;
+                first_modbus_time = now;
+            }
+        }
+        // calculate timeout
+        now = std.time.milliTimestamp();
+        timeout = @intCast(next_modbus_time - now);
+        if (timeout < 0) timeout = 0;
+        try log.logln(log.LogLevel.info, @src(), "timeout {}", .{timeout});
+        // setup poll
         poll_count = 0;
         // setup terminate fd
         const term_index = poll_count;
@@ -464,7 +453,6 @@ fn process_tty_info(info: *tty_info_t) !void
                 try check_peers(info, active_polls, peers_index, poll_count);
             }
         }
-        try process_tty_info_list(info);
     }
 }
 
@@ -482,13 +470,14 @@ pub fn main() !void
     var tty_info: tty_info_t = .{};
     try tty_info.init();
     defer tty_info.deinit();
-    try setup_tty_info(&tty_info);
+    try toml.setup_tty_info(&tty_info);
     try print_tty_info(&tty_info);
     // setup listen socket
-    posix.unlink(g_listen_socket) catch |err|
+    const listen_socket = std.mem.sliceTo(&tty_info.listen_socket, 0);
+    posix.unlink(listen_socket) catch |err|
             if (err != error.FileNotFound) return err;
     const tpe: u32 = posix.SOCK.STREAM;
-    var address = try net.Address.initUnix(g_listen_socket);
+    var address = try net.Address.initUnix(listen_socket);
     tty_info.sck = try posix.socket(address.any.family, tpe, 0);
     const address_len = address.getOsSockLen();
     try posix.bind(tty_info.sck, &address.any, address_len);
