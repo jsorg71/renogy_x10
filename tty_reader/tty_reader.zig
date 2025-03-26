@@ -25,6 +25,7 @@ pub const TtyError = error
     ModbusGetResponseTimeoutFailed,
     ModbusConnectFailed,
     ModbusSetDebugFailed,
+    PeerNotFound,
 };
 
 const DL = std.DoublyLinkedList(*parse.parse_t);
@@ -45,6 +46,7 @@ const tty_peer_info_t = struct // one for each client connected
     //*************************************************************************
     fn init(self: *tty_peer_info_t) !void
     {
+        self.* = .{};
         self.out_queue = DL{};
         self.ins = try parse.create(&g_allocator, 64 * 1024);
     }
@@ -58,6 +60,7 @@ const tty_peer_info_t = struct // one for each client connected
             g_allocator.destroy(anode);
         }
         posix.close(self.sck);
+        self.ins.delete();
     }
 
 };
@@ -88,6 +91,7 @@ pub const tty_info_t = struct // just one of these
     //*************************************************************************
     fn init(self: *tty_info_t) !void
     {
+        self.* = .{};
         self.id_list = std.ArrayList(tty_id_info_t).init(g_allocator);
         self.peer_list = std.ArrayList(tty_peer_info_t).init(g_allocator);
     }
@@ -217,7 +221,7 @@ fn hexdump_slice(slice: []u16) !void
 fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
 {
     var err = c.modbus_set_slave(info.ctx, id_info.id);
-    try log.logln(log.LogLevel.info, @src(),
+    try log.logln_devel(log.LogLevel.info, @src(),
             "set slave id {} err {}",
             .{id_info.id, err});
     try err_if(err != 0, TtyError.ModbusSetSlaveFailed);
@@ -229,17 +233,23 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
         defer g_allocator.free(regs);
         err = c.modbus_read_registers(info.ctx,
                 id_info.read_address, count, regs.ptr);
-        try log.logln(log.LogLevel.info, @src(),
+        try log.logln_devel(log.LogLevel.info, @src(),
                 "modbus_read_registers read address {} err {}",
                 .{id_info.read_address, err});
         try err_if(err != count, TtyError.ModbusReadRegistersFailed);
-        try hexdump_slice(regs);
+        if (info.modbus_debug)
+        {
+            try hexdump_slice(regs);
+        }
         // add data to each peer
+        try log.logln_devel(log.LogLevel.info, @src(), "peer len {}",
+                .{info.peer_list.items.len});
         for (info.peer_list.items) |*aitem|
         {
             const msg_size = 2 + 2 + 2 + 2 + 2 + 2 + count * 2;
             var s = try parse.create(&g_allocator, msg_size);
             errdefer s.delete();
+            try s.check_rem(msg_size);
             s.out_u16_le(0); // msg id
             s.out_u16_le(msg_size); // size
             s.out_u16_le(0); // type
@@ -255,6 +265,10 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
             errdefer g_allocator.destroy(node);
             node.* = .{.data = s};
             aitem.out_queue.append(node);
+            try log.logln_devel(log.LogLevel.info, @src(),
+                    "peer sck {} queue len {}",
+                    .{aitem.sck, aitem.out_queue.len});
+
         }
     }
     else if (info.id_list_sub_index == 2)
@@ -265,17 +279,23 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
         defer g_allocator.free(regs);
         err = c.modbus_read_input_registers(info.ctx,
                 id_info.read_input_address, count, regs.ptr);
-        try log.logln(log.LogLevel.info, @src(),
+        try log.logln_devel(log.LogLevel.info, @src(),
                 "modbus_read_input_registers read address {} err {}",
                 .{id_info.read_input_address, err});
         try err_if(err != count, TtyError.ModbusReadInputRegistersFailed);
-        try hexdump_slice(regs);
+        if (info.modbus_debug)
+        {
+            try hexdump_slice(regs);
+        }
         // add data to each peer
+        try log.logln_devel(log.LogLevel.info, @src(), "peer len {}",
+                .{info.peer_list.items.len});
         for (info.peer_list.items) |*aitem|
         {
             const msg_size = 2 + 2 + 2 + 2 + 2 + 2 + count * 2;
             var s = try parse.create(&g_allocator, msg_size);
             errdefer s.delete();
+            try s.check_rem(msg_size);
             s.out_u16_le(0); // msg id
             s.out_u16_le(msg_size); // size
             s.out_u16_le(1); // type
@@ -291,8 +311,24 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
             errdefer g_allocator.destroy(node);
             node.* = .{.data = s};
             aitem.out_queue.append(node);
+            try log.logln_devel(log.LogLevel.info, @src(),
+                    "peer sck {} queue len {}",
+                    .{aitem.sck, aitem.out_queue.len});
         }
     }
+}
+
+//*****************************************************************************
+fn get_peer_by_sck(info: *tty_info_t, sck: i32) !*tty_peer_info_t
+{
+    for (info.peer_list.items) |*peer|
+    {
+        if (peer.sck == sck)
+        {
+            return peer;
+        }
+    }
+    return TtyError.PeerNotFound;
 }
 
 //*****************************************************************************
@@ -304,20 +340,40 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
         if ((active_polls[index].revents & posix.POLL.IN) != 0)
         {
             // data in from peer
-            try log.logln(log.LogLevel.info, @src(), "{s}",
-                    .{"data from peer"});
+            try log.logln(log.LogLevel.info, @src(),
+                    "POLL.IN set for sck {}",
+                    .{active_polls[index].fd});
+            const peer = try get_peer_by_sck(info, active_polls[index].fd);
+            var in_data: [64]u8 = undefined;
+            const in_slice = &in_data;
+            const sent = try posix.recv(peer.sck, in_slice, 0);
+            if (sent < 1)
+            {
+                try log.logln(log.LogLevel.info, @src(),
+                        "delme set for sck {}",
+                        .{active_polls[index].fd});
+                peer.delme = true;
+            }
+
         }
         if ((active_polls[index].revents & posix.POLL.OUT) != 0)
         {
             // data out to peer
-            try log.logln(log.LogLevel.info, @src(), "{s}",
-                    .{"data to peer"});
-            const peer = &info.peer_list.items[index];
+            try log.logln_devel(log.LogLevel.info, @src(),
+                    "POLL.OUT set for sck {}",
+                    .{active_polls[index].fd});
+            const peer = try get_peer_by_sck(info, active_polls[index].fd);
+            try log.logln_devel(log.LogLevel.info, @src(),
+                    "peer sck {} queue len {}",
+                    .{peer.sck, peer.out_queue.len});
             if (peer.out_queue.first) |anode|
             {
                 const outs = anode.data;
                 const out_slice = outs.data[outs.offset..];
                 const sent = try posix.send(peer.sck, out_slice, 0);
+                try log.logln_devel(log.LogLevel.info, @src(),
+                        "posix.send rv {}",
+                        .{sent});
                 if (sent > 0)
                 {
                     outs.offset += sent;
@@ -330,15 +386,25 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
                 }
                 else
                 {
+                    try log.logln(log.LogLevel.info, @src(),
+                            "delme set for sck {}",
+                            .{active_polls[index].fd});
                     peer.delme = true;
                 }
+            }
+            else
+            {
+                try log.logln(log.LogLevel.info, @src(),
+                        "no data for src {}",
+                        .{active_polls[index].fd});
             }
         }
     }
     // check for delme peers
-    var jndex = poll_count - 1;
-    while (jndex >= peers_index) : (jndex -= 1)
+    var jndex = info.peer_list.items.len;
+    while (jndex > 0)
     {
+        jndex -= 1;
         const peer = &info.peer_list.items[jndex];
         if (peer.delme)
         {
@@ -371,6 +437,7 @@ fn process_tty_info(info: *tty_info_t) !void
     try err_if(err != 0, TtyError.ModbusSetDebugFailed);
 
     var now: i64 = std.time.milliTimestamp();
+    var last_modbus_time: i64 = now;
     var next_modbus_time: i64 = now;
     var first_modbus_time: i64 = now;
 
@@ -380,25 +447,43 @@ fn process_tty_info(info: *tty_info_t) !void
     var poll_count: usize = undefined;
     while (true)
     {
-        now = std.time.milliTimestamp();
-        if (now >= next_modbus_time)
+        timeout = -1;
+        if (info.peer_list.items.len > 0)
         {
-            const id_info = info.get_next_id_info();
-            if (id_info) |aid_info|
+            now = std.time.milliTimestamp();
+            if ((now >= next_modbus_time) and (now - last_modbus_time < 800))
             {
-                next_modbus_time = now + info.item_mstime;
-                try process_tty_id_info(info, aid_info);
+                // safety check, can not let 2 process_tty_id_info calls
+                // too close together
+                try log.logln(log.LogLevel.info, @src(),
+                        "adjusting next_modbus_time " ++
+                        "now {} " ++
+                        "last_modbus_time {} " ++
+                        "diff {}",
+                        .{now, last_modbus_time, now - last_modbus_time});
+               next_modbus_time = last_modbus_time + 800;
+               first_modbus_time = last_modbus_time + 800;
             }
-            else
+            if (now >= next_modbus_time)
             {
-                next_modbus_time = first_modbus_time + info.list_mstime;
-                first_modbus_time = now;
+                const id_info = info.get_next_id_info();
+                if (id_info) |aid_info|
+                {
+                    next_modbus_time = next_modbus_time + info.item_mstime;
+                    try process_tty_id_info(info, aid_info);
+                    now = std.time.milliTimestamp();
+                    last_modbus_time = now;
+                }
+                else
+                {
+                    next_modbus_time = first_modbus_time + info.list_mstime;
+                    first_modbus_time = next_modbus_time;
+                }
             }
+            // calculate timeout
+            timeout = @intCast(next_modbus_time - now);
+            if (timeout < 0) timeout = 0;
         }
-        // calculate timeout
-        now = std.time.milliTimestamp();
-        timeout = @intCast(next_modbus_time - now);
-        if (timeout < 0) timeout = 0;
         try log.logln(log.LogLevel.info, @src(), "timeout {}", .{timeout});
         // setup poll
         poll_count = 0;
@@ -467,7 +552,7 @@ pub fn main() !void
     defer cleanup_signals();
     try log.logln(log.LogLevel.info, @src(), "signals init ok", .{});
     // setup tty_info
-    var tty_info: tty_info_t = .{};
+    var tty_info: tty_info_t = undefined;
     try tty_info.init();
     defer tty_info.deinit();
     try toml.setup_tty_info(&tty_info);

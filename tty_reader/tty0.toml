@@ -7,20 +7,20 @@ list_mstime=10000
 listen_socket="/tmp/tty_reader.socket"
 
 [id1]
-read_address=257
-read_count=1
+read_address=256
+read_count=10
 read_input_address=0
 read_input_count=0
 
 [id3]
 read_address=0
-read_count=4
+read_count=0
 read_input_address=0
 read_input_count=8
 
 [id6]
 read_address=0
-read_count=4
+read_count=0
 read_input_address=0
 read_input_count=8
 
