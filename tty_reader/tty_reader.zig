@@ -340,18 +340,17 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
         if ((active_polls[index].revents & posix.POLL.IN) != 0)
         {
             // data in from peer
+            const fd = active_polls[index].fd;
             try log.logln(log.LogLevel.info, @src(),
-                    "POLL.IN set for sck {}",
-                    .{active_polls[index].fd});
-            const peer = try get_peer_by_sck(info, active_polls[index].fd);
-            var in_data: [64]u8 = undefined;
+                    "POLL.IN set for sck {}", .{fd});
+            const peer = try get_peer_by_sck(info, fd);
+            var in_data: [32]u8 = undefined;
             const in_slice = &in_data;
             const sent = try posix.recv(peer.sck, in_slice, 0);
             if (sent < 1)
             {
                 try log.logln(log.LogLevel.info, @src(),
-                        "delme set for sck {}",
-                        .{active_polls[index].fd});
+                        "delme set for sck {}", .{fd});
                 peer.delme = true;
             }
 
@@ -359,10 +358,10 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
         if ((active_polls[index].revents & posix.POLL.OUT) != 0)
         {
             // data out to peer
+            const fd = active_polls[index].fd;
             try log.logln_devel(log.LogLevel.info, @src(),
-                    "POLL.OUT set for sck {}",
-                    .{active_polls[index].fd});
-            const peer = try get_peer_by_sck(info, active_polls[index].fd);
+                    "POLL.OUT set for sck {}", .{fd});
+            const peer = try get_peer_by_sck(info, fd);
             try log.logln_devel(log.LogLevel.info, @src(),
                     "peer sck {} queue len {}",
                     .{peer.sck, peer.out_queue.len});
@@ -387,16 +386,14 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
                 else
                 {
                     try log.logln(log.LogLevel.info, @src(),
-                            "delme set for sck {}",
-                            .{active_polls[index].fd});
+                            "delme set for sck {}", .{fd});
                     peer.delme = true;
                 }
             }
             else
             {
                 try log.logln(log.LogLevel.info, @src(),
-                        "no data for src {}",
-                        .{active_polls[index].fd});
+                        "no data for src {}", .{fd});
             }
         }
     }
@@ -428,10 +425,10 @@ fn process_tty_info(info: *tty_info_t) !void
             &response_sec, &response_usec);
     try err_if(err != 0, TtyError.ModbusGetResponseTimeoutFailed);
     try log.logln(log.LogLevel.info, @src(),
-            "response_sec {} response_usec {}",
+            "modbus_get_response_timeout: response_sec {} response_usec {}",
             .{response_sec, response_usec});
     err = c.modbus_connect(info.ctx);
-    try log.logln(log.LogLevel.info, @src(), "connect err {}", .{err});
+    try log.logln(log.LogLevel.info, @src(), "modbus_connect: err {}", .{err});
     try err_if(err != 0, TtyError.ModbusConnectFailed);
     err = c.modbus_set_debug(info.ctx, @intFromBool(info.modbus_debug));
     try err_if(err != 0, TtyError.ModbusSetDebugFailed);
@@ -484,7 +481,8 @@ fn process_tty_info(info: *tty_info_t) !void
             timeout = @intCast(next_modbus_time - now);
             if (timeout < 0) timeout = 0;
         }
-        try log.logln(log.LogLevel.info, @src(), "timeout {}", .{timeout});
+        try log.logln_devel(log.LogLevel.info, @src(),
+                "timeout {}", .{timeout});
         // setup poll
         poll_count = 0;
         // setup terminate fd

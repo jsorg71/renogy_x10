@@ -14,6 +14,7 @@ pub const TomlError = error
 };
 
 const g_error_buf_size: usize = 1024;
+const g_config_file = "tty0.toml";
 
 //*****************************************************************************
 inline fn err_if(b: bool, err: TomlError) !void
@@ -44,7 +45,6 @@ fn load_tty_config(file_name: []const u8) !*c.toml_table_t
     const table = c.toml_parse(buf.ptr, errbuf.ptr, g_error_buf_size);
     if (table) |atable|
     {
-        try log.logln(log.LogLevel.info, @src(), "toml_parse ok", .{});
         return atable;
     }
     try log.logln(log.LogLevel.info, @src(), 
@@ -55,8 +55,13 @@ fn load_tty_config(file_name: []const u8) !*c.toml_table_t
 //*****************************************************************************
 pub fn setup_tty_info(info: *tty.tty_info_t) !void
 {
-    const table = try load_tty_config("tty0.toml");
+    try log.logln(log.LogLevel.info, @src(),
+            "config file [{s}]", .{g_config_file});
+    const table = try load_tty_config(g_config_file);
     defer c.toml_free(table);
+    try log.logln(log.LogLevel.info, @src(),
+            "load_tty_config ok for file [{s}]",
+            .{g_config_file});
     var index: c_int = 0;
     while (c.toml_key_in(table, index)) |akey| : (index += 1)
     {
