@@ -412,7 +412,8 @@ static void *expand(void *p, int sz, int newsz) {
   if (!s)
     return 0;
 
-  memcpy(s, p, sz);
+  if (sz > 0)
+    memcpy(s, p, sz);
   FREE(p);
   return s;
 }
@@ -423,7 +424,8 @@ static void **expand_ptrarr(void **p, int n) {
     return 0;
 
   s[n] = 0;
-  memcpy(s, p, n * sizeof(void *));
+  if (n > 0)
+    memcpy(s, p, n * sizeof(void *));
   FREE(p);
   return s;
 }
@@ -2232,7 +2234,6 @@ int toml_rtos(toml_raw_t src, char **ret) {
       sp++;
     else if (sp[0] == '\r' && sp[1] == '\n')
       sp += 2;
-
   } else {
     sp = src + 1;
     sq = src + srclen - 1;
