@@ -47,7 +47,7 @@ const tty_peer_info_t = struct // one for each client connected
     fn init(self: *tty_peer_info_t) !void
     {
         self.* = .{};
-        self.out_queue = DL{};
+        self.out_queue = .{};
         self.ins = try parse.create(&g_allocator, 64 * 1024);
     }
 
@@ -87,6 +87,12 @@ pub const tty_info_t = struct // just one of these
     ctx: *c.modbus_t = undefined,
     id_list_index: usize = 0,
     id_list_sub_index: usize = 0,
+    response_sec: u32 = 0,
+    response_usec: u32 = 0,
+    min_mstime: u32 = 0,
+    last_modbus_time: ?i64 = null,
+    next_modbus_time: ?i64 = null,
+    first_modbus_time: ?i64 = null,
 
     //*************************************************************************
     fn init(self: *tty_info_t) !void
@@ -199,7 +205,7 @@ fn print_tty_info(info: *tty_info_t) !void
             "  got [{}] item to monitor", .{info.id_list.items.len});
     for (0..info.id_list.items.len) |index|
     {
-        const item: tty_id_info_t = info.id_list.items[index];
+        const item = &info.id_list.items[index];
         try log.logln(log.LogLevel.info, @src(),
                 "    index {} item id {} address {} count {} " ++
                 "input address {} input count {}",
@@ -263,12 +269,11 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
             s.offset = 0;
             const node = try g_allocator.create(DL.Node);
             errdefer g_allocator.destroy(node);
-            node.* = .{.data = s};
-            aitem.out_queue.append(node);
             try log.logln_devel(log.LogLevel.info, @src(),
                     "peer sck {} queue len {}",
                     .{aitem.sck, aitem.out_queue.len});
-
+            node.* = .{.data = s};
+            aitem.out_queue.append(node);
         }
     }
     else if (info.id_list_sub_index == 2)
@@ -309,13 +314,55 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
             s.offset = 0;
             const node = try g_allocator.create(DL.Node);
             errdefer g_allocator.destroy(node);
-            node.* = .{.data = s};
-            aitem.out_queue.append(node);
             try log.logln_devel(log.LogLevel.info, @src(),
                     "peer sck {} queue len {}",
                     .{aitem.sck, aitem.out_queue.len});
+            node.* = .{.data = s};
+            aitem.out_queue.append(node);
         }
     }
+}
+
+//*****************************************************************************
+fn check_modbus(info: *tty_info_t, timeout: *i32) !void
+{
+    var now = std.time.milliTimestamp();
+    var nmt = info.next_modbus_time orelse now;
+    const fmt = info.first_modbus_time orelse now;
+    const lmt = info.last_modbus_time orelse 0;
+    if ((now >= nmt) and (now - lmt < info.min_mstime))
+    {
+        // safety check, can not let 2 process_tty_id_info calls
+        // too close together
+        try log.logln_devel(log.LogLevel.info, @src(),
+                "adjusting next_modbus_time " ++
+                "now {} " ++
+                "last_modbus_time {} " ++
+                "diff {}",
+                .{now, lmt, now - lmt});
+        info.next_modbus_time = lmt + info.min_mstime;
+        info.first_modbus_time = lmt + info.min_mstime;
+    }
+    else if (now >= nmt)
+    {
+        const id_info = info.get_next_id_info();
+        if (id_info) |aid_info|
+        {
+            info.next_modbus_time = now + info.item_mstime;
+            try process_tty_id_info(info, aid_info);
+            now = std.time.milliTimestamp();
+            info.last_modbus_time = now;
+        }
+        else
+        {
+            nmt = fmt + info.list_mstime;
+            info.next_modbus_time = nmt;
+            info.first_modbus_time = nmt;
+        }
+    }
+    // calculate timeout
+    timeout.* = @intCast(nmt - now);
+    timeout.* = @max(timeout.*, 0);
 }
 
 //*****************************************************************************
@@ -337,15 +384,14 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
 {
     for (peers_index..poll_count) |index|
     {
+        const fd = active_polls[index].fd;
         if ((active_polls[index].revents & posix.POLL.IN) != 0)
         {
             // data in from peer
-            const fd = active_polls[index].fd;
             try log.logln(log.LogLevel.info, @src(),
                     "POLL.IN set for sck {}", .{fd});
             const peer = try get_peer_by_sck(info, fd);
-            var in_data: [32]u8 = undefined;
-            const in_slice = &in_data;
+            const in_slice = peer.ins.data[peer.ins.offset..];
             const sent = try posix.recv(peer.sck, in_slice, 0);
             if (sent < 1)
             {
@@ -358,7 +404,6 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
         if ((active_polls[index].revents & posix.POLL.OUT) != 0)
         {
             // data out to peer
-            const fd = active_polls[index].fd;
             try log.logln_devel(log.LogLevel.info, @src(),
                     "POLL.OUT set for sck {}", .{fd});
             const peer = try get_peer_by_sck(info, fd);
@@ -412,32 +457,8 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
 }
 
 //*****************************************************************************
-fn process_tty_info(info: *tty_info_t) !void
+fn tty_main_loop(info: *tty_info_t) !void
 {
-    try log.logln(log.LogLevel.info, @src(), "", .{});
-    const er_mode: c.modbus_error_recovery_mode =
-            c.MODBUS_ERROR_RECOVERY_LINK | c.MODBUS_ERROR_RECOVERY_PROTOCOL;
-    var err = c.modbus_set_error_recovery(info.ctx, er_mode);
-    try err_if(err != 0, TtyError.ModbusSetErrorRecoveryFailed);
-    var response_sec: u32 = 0;
-    var response_usec: u32 = 0;
-    err = c.modbus_get_response_timeout(info.ctx,
-            &response_sec, &response_usec);
-    try err_if(err != 0, TtyError.ModbusGetResponseTimeoutFailed);
-    try log.logln(log.LogLevel.info, @src(),
-            "modbus_get_response_timeout: response_sec {} response_usec {}",
-            .{response_sec, response_usec});
-    err = c.modbus_connect(info.ctx);
-    try log.logln(log.LogLevel.info, @src(), "modbus_connect: err {}", .{err});
-    try err_if(err != 0, TtyError.ModbusConnectFailed);
-    err = c.modbus_set_debug(info.ctx, @intFromBool(info.modbus_debug));
-    try err_if(err != 0, TtyError.ModbusSetDebugFailed);
-
-    var now: i64 = std.time.milliTimestamp();
-    var last_modbus_time: i64 = now;
-    var next_modbus_time: i64 = now;
-    var first_modbus_time: i64 = now;
-
     const max_polls = 32;
     var timeout: i32 = undefined;
     var polls: [max_polls]posix.pollfd = undefined;
@@ -445,41 +466,17 @@ fn process_tty_info(info: *tty_info_t) !void
     while (true)
     {
         timeout = -1;
-        if (info.peer_list.items.len > 0)
+        if (info.peer_list.items.len == 0)
         {
-            now = std.time.milliTimestamp();
-            if ((now >= next_modbus_time) and (now - last_modbus_time < 800))
-            {
-                // safety check, can not let 2 process_tty_id_info calls
-                // too close together
-                try log.logln(log.LogLevel.info, @src(),
-                        "adjusting next_modbus_time " ++
-                        "now {} " ++
-                        "last_modbus_time {} " ++
-                        "diff {}",
-                        .{now, last_modbus_time, now - last_modbus_time});
-               next_modbus_time = last_modbus_time + 800;
-               first_modbus_time = last_modbus_time + 800;
-            }
-            if (now >= next_modbus_time)
-            {
-                const id_info = info.get_next_id_info();
-                if (id_info) |aid_info|
-                {
-                    next_modbus_time = next_modbus_time + info.item_mstime;
-                    try process_tty_id_info(info, aid_info);
-                    now = std.time.milliTimestamp();
-                    last_modbus_time = now;
-                }
-                else
-                {
-                    next_modbus_time = first_modbus_time + info.list_mstime;
-                    first_modbus_time = next_modbus_time;
-                }
-            }
-            // calculate timeout
-            timeout = @intCast(next_modbus_time - now);
-            if (timeout < 0) timeout = 0;
+            info.next_modbus_time = null;
+            info.first_modbus_time = null;
+            info.last_modbus_time = null;
+            info.id_list_index = 0;
+            info.id_list_sub_index = 0;
+        }
+        else
+        {
+            try check_modbus(info, &timeout);
         }
         try log.logln_devel(log.LogLevel.info, @src(),
                 "timeout {}", .{timeout});
@@ -537,6 +534,29 @@ fn process_tty_info(info: *tty_info_t) !void
             }
         }
     }
+}
+
+//*****************************************************************************
+fn process_tty_info(info: *tty_info_t) !void
+{
+    try log.logln(log.LogLevel.info, @src(), "", .{});
+    const er_mode: c.modbus_error_recovery_mode =
+            c.MODBUS_ERROR_RECOVERY_LINK | c.MODBUS_ERROR_RECOVERY_PROTOCOL;
+    var err = c.modbus_set_error_recovery(info.ctx, er_mode);
+    try err_if(err != 0, TtyError.ModbusSetErrorRecoveryFailed);
+    err = c.modbus_get_response_timeout(info.ctx,
+            &info.response_sec, &info.response_usec);
+    try err_if(err != 0, TtyError.ModbusGetResponseTimeoutFailed);
+    try log.logln(log.LogLevel.info, @src(),
+            "modbus_get_response_timeout: response_sec {} response_usec {}",
+            .{info.response_sec, info.response_usec});
+    info.min_mstime = (info.response_sec * 1000) + (info.response_usec / 1000);
+    err = c.modbus_connect(info.ctx);
+    try log.logln(log.LogLevel.info, @src(), "modbus_connect: err {}", .{err});
+    try err_if(err != 0, TtyError.ModbusConnectFailed);
+    err = c.modbus_set_debug(info.ctx, @intFromBool(info.modbus_debug));
+    try err_if(err != 0, TtyError.ModbusSetDebugFailed);
+    try tty_main_loop(info);
 }
 
 //*****************************************************************************
