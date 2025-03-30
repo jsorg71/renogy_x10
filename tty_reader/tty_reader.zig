@@ -1,5 +1,6 @@
 
 const std = @import("std");
+const builtin = @import("builtin");
 const log = @import("log");
 const hexdump = @import("hexdump");
 const parse = @import("parse");
@@ -14,6 +15,7 @@ const c = @cImport(
 pub var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
 const g_tty_name_max_length = 128;
+var g_deamonize: bool = false;
 
 pub const TtyError = error
 {
@@ -26,6 +28,7 @@ pub const TtyError = error
     ModbusConnectFailed,
     ModbusSetDebugFailed,
     PeerNotFound,
+    ShowCommandLine,
 };
 
 const DL = std.DoublyLinkedList(*parse.parse_t);
@@ -340,8 +343,9 @@ fn check_modbus(info: *tty_info_t, timeout: *i32) !void
                 "last_modbus_time {} " ++
                 "diff {}",
                 .{now, lmt, now - lmt});
-        info.next_modbus_time = lmt + info.min_mstime;
-        info.first_modbus_time = lmt + info.min_mstime;
+        nmt = lmt + info.min_mstime;
+        info.next_modbus_time = nmt;
+        info.first_modbus_time = nmt;
     }
     else if (now >= nmt)
     {
@@ -560,10 +564,88 @@ fn process_tty_info(info: *tty_info_t) !void
 }
 
 //*****************************************************************************
+fn show_command_line_args() !void
+{
+    const app_name = std.mem.sliceTo(std.os.argv[0], 0);
+    const stdout = std.io.getStdOut();
+    const writer = stdout.writer();
+    const vstr = builtin.zig_version_string;
+    try writer.print("{s} - A tty publisher\n", .{app_name});
+    try writer.print("built with zig version {s}\n", .{vstr});
+    try writer.print("Usage: {s} [options]\n", .{app_name});
+    try writer.print("  -h: print this help\n", .{});
+    try writer.print("  -F: run in foreground\n", .{});
+    try writer.print("  -D: run in background\n", .{});
+}
+
+//*****************************************************************************
+fn process_args() !void
+{
+    var slice_arg: []u8 = undefined;
+    var index: usize = 1;
+    const count = std.os.argv.len;
+    if (count < 2)
+    {
+        return TtyError.ShowCommandLine;
+    }
+    while (index < count) : (index += 1)
+    {
+        slice_arg = std.mem.sliceTo(std.os.argv[index], 0);
+        if (std.mem.eql(u8, slice_arg, "-h"))
+        {
+            return error.ShowCommandLine;
+        }
+        else if (std.mem.eql(u8, slice_arg, "-D"))
+        {
+            g_deamonize = true;
+        }
+        else if (std.mem.eql(u8, slice_arg, "-F"))
+        {
+            g_deamonize = false;
+        }
+        else
+        {
+            return error.ShowCommandLine;
+        }
+    }
+}
+
+//*****************************************************************************
 pub fn main() !void
 {
-    // setup logging
-    try log.init(&g_allocator, log.LogLevel.debug);
+    const result = process_args();
+    if (result) |_| { } else |err|
+    {
+        if (err == TtyError.ShowCommandLine)
+        {
+            try show_command_line_args();
+        }
+        return err;
+    }
+    if (g_deamonize)
+    {
+        const rv = try posix.fork();
+        if (rv == 0)
+        {
+            posix.close(0);
+            posix.close(1);
+            posix.close(2);
+            _ = try posix.open("/dev/null", .{.ACCMODE = .RDONLY}, 0);
+            _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
+            _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
+            try log.initWithFile(&g_allocator, log.LogLevel.debug,
+                    "/tmp/tty_reader.log");
+        }
+        else if (rv > 0)
+        {
+            std.debug.print("started with pid {}\n", .{rv});
+            return;
+        }
+    }
+    else
+    {
+        try log.init(&g_allocator, log.LogLevel.debug);
+    }
     defer log.deinit();
     // setup signals
     try setup_signals();
