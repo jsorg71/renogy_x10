@@ -626,7 +626,7 @@ pub fn main() !void
     {
         const rv = try posix.fork();
         if (rv == 0)
-        {
+        { // child
             posix.close(0);
             posix.close(1);
             posix.close(2);
@@ -637,7 +637,7 @@ pub fn main() !void
                     "/tmp/tty_reader.log");
         }
         else if (rv > 0)
-        {
+        { // parent
             std.debug.print("started with pid {}\n", .{rv});
             return;
         }
