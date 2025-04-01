@@ -182,10 +182,20 @@ fn setup_signals() !void
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
     sa.handler = .{ .handler = term_sig };
-    posix.sigaction(posix.SIG.INT, &sa, null);
-    posix.sigaction(posix.SIG.TERM, &sa, null);
-    sa.handler = .{ .handler = pipe_sig };
-    posix.sigaction(posix.SIG.PIPE, &sa, null);
+    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 14)
+    {
+        posix.sigaction(posix.SIG.INT, &sa, null);
+        posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{ .handler = pipe_sig };
+        posix.sigaction(posix.SIG.PIPE, &sa, null);
+    }
+    else
+    {
+        try posix.sigaction(posix.SIG.INT, &sa, null);
+        try posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{ .handler = pipe_sig };
+        try posix.sigaction(posix.SIG.PIPE, &sa, null);
+    }
 }
 
 //*****************************************************************************
