@@ -182,19 +182,19 @@ fn setup_signals() !void
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
     sa.handler = .{ .handler = term_sig };
-    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 14)
-    {
-        posix.sigaction(posix.SIG.INT, &sa, null);
-        posix.sigaction(posix.SIG.TERM, &sa, null);
-        sa.handler = .{ .handler = pipe_sig };
-        posix.sigaction(posix.SIG.PIPE, &sa, null);
-    }
-    else
+    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);
         sa.handler = .{ .handler = pipe_sig };
         try posix.sigaction(posix.SIG.PIPE, &sa, null);
+    }
+    else
+    {
+        posix.sigaction(posix.SIG.INT, &sa, null);
+        posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{ .handler = pipe_sig };
+        posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
 }
 
@@ -279,7 +279,7 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
             {
                 s.out_u16_le(areg);
             }
-            s.offset = 0;
+            try s.reset(0);
             const node = try g_allocator.create(DL.Node);
             errdefer g_allocator.destroy(node);
             try log.logln_devel(log.LogLevel.info, @src(),
@@ -324,7 +324,7 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
             {
                 s.out_u16_le(areg);
             }
-            s.offset = 0;
+            try s.reset(0);
             const node = try g_allocator.create(DL.Node);
             errdefer g_allocator.destroy(node);
             try log.logln_devel(log.LogLevel.info, @src(),
@@ -517,7 +517,7 @@ fn tty_main_loop(info: *tty_info_t) !void
             if (aitem.out_queue.len > 0)
             {
                 // we have data to write
-                polls[poll_count].events = posix.POLL.OUT;
+                polls[poll_count].events |= posix.POLL.OUT;
             }
             polls[poll_count].revents = 0;
             poll_count += 1;
@@ -665,7 +665,7 @@ pub fn main() !void
     var tty_info: tty_info_t = undefined;
     try tty_info.init();
     defer tty_info.deinit();
-    try toml.setup_tty_info(&tty_info);
+    try toml.setup_tty_info(&g_allocator, &tty_info);
     try print_tty_info(&tty_info);
     // setup listen socket
     const listen_socket = std.mem.sliceTo(&tty_info.listen_socket, 0);

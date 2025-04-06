@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const log = @import("log");
 const tty = @import("tty_reader.zig");
 const c = @cImport(
@@ -13,6 +14,7 @@ pub const TomlError = error
     TomlTableInFailed,
 };
 
+var g_allocator: *const std.mem.Allocator = undefined;
 const g_error_buf_size: usize = 1024;
 const g_config_file = "tty0.toml";
 
@@ -53,10 +55,33 @@ fn load_tty_config(file_name: []const u8) !*c.toml_table_t
 }
 
 //*****************************************************************************
-pub fn setup_tty_info(info: *tty.tty_info_t) !void
+fn toml_malloc(size: usize) callconv(.c) ?*anyopaque
+{
+    // if (builtin.mode == .ReleaseSafe)
+    // {
+    //     // for valgrind warnings
+    //     return std.c.calloc(1, size + 16);
+    // }
+    // else
+    {
+        return std.c.malloc(size);
+    }
+}
+
+//*****************************************************************************
+fn toml_free(ptr: ?*anyopaque) callconv(.c) void
+{
+    std.c.free(ptr);
+}
+
+//*****************************************************************************
+pub fn setup_tty_info(allocator: *const std.mem.Allocator,
+        info: *tty.tty_info_t) !void
 {
     try log.logln(log.LogLevel.info, @src(),
             "config file [{s}]", .{g_config_file});
+    g_allocator = allocator;
+    c.toml_set_memutil(toml_malloc, toml_free);
     const table = try load_tty_config(g_config_file);
     defer c.toml_free(table);
     try log.logln(log.LogLevel.info, @src(),
