@@ -3,7 +3,7 @@
 tty="/dev/ttyUSB0"
 modbus_debug=false
 item_mstime=1000
-list_mstime=10000
+list_mstime=60000
 listen_socket="/tmp/tty_reader.socket"
 
 [id1]
