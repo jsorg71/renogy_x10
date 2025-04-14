@@ -55,7 +55,7 @@ fn load_tty_config(file_name: []const u8) !*c.toml_table_t
 }
 
 //*****************************************************************************
-fn toml_malloc(size: usize) callconv(.c) ?*anyopaque
+fn toml_malloc(size: usize) callconv(.C) ?*anyopaque
 {
     // if (builtin.mode == .ReleaseSafe)
     // {
@@ -69,7 +69,7 @@ fn toml_malloc(size: usize) callconv(.c) ?*anyopaque
 }
 
 //*****************************************************************************
-fn toml_free(ptr: ?*anyopaque) callconv(.c) void
+fn toml_free(ptr: ?*anyopaque) callconv(.C) void
 {
     std.c.free(ptr);
 }
