@@ -1,10 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const log = @import("log");
 const hexdump = @import("hexdump");
 const parse = @import("parse");
 const net = std.net;
 const posix = std.posix;
 
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
+var g_term: [2]i32 = .{-1, -1};
 
 const g_influx_database = "solar";
 const g_influx_token =
@@ -12,7 +15,9 @@ const g_influx_token =
     "uG4qDlBFsEGS_jwo9eBD2pf2jtra7sgi0ajl5R-oEA==";
 const g_influx_hostname = "server3.xrdp.org";
 const g_influx_port: c_int = 8086;
-const g_secs: c_int = 60;
+var g_deamonize: bool = false;
+
+const DL = std.DoublyLinkedList(*parse.parse_t);
 
 const info_t = struct
 {
@@ -20,8 +25,58 @@ const info_t = struct
     buffer_con: [64]u8 = undefined,
     buffer_in: [1024]u8 = undefined,
     influx_ip: [64]u8 = undefined,
-    sck: i32 = -1,
+    isck: i32 = -1,
+    csck: i32 = -1,
+
+    code: u16 = 0,
+    size: u16 = 0,
+    to_read: usize = 4,
+    readed: usize = 0,
+
+    out_queue: DL = undefined,
+
+    connecting: bool = false,
 };
+
+//*****************************************************************************
+fn connect_isck(info: *info_t) !void
+{
+    if (info.isck == -1)
+    {
+        const port_u16: u16 = 8086;
+        const address_list = try std.net.getAddressList(g_allocator,
+                g_influx_hostname, port_u16);
+        defer address_list.deinit();
+        if (address_list.addrs.len < 1)
+        {
+            return error.InvalidParam;
+        }
+        const address = address_list.addrs[0];
+        const tpe: u32 = posix.SOCK.STREAM;
+        info.isck = try posix.socket(address.any.family, tpe, 0);
+        // set non blocking
+        var val1 = try posix.fcntl(info.isck, posix.F.GETFL, 0);
+        if ((val1 & posix.SOCK.NONBLOCK) == 0)
+        {
+            val1 = val1 | posix.SOCK.NONBLOCK;
+            _ = try posix.fcntl(info.isck, posix.F.SETFL, val1);
+        }
+        const address_len = address.getOsSockLen();
+        const result = posix.connect(info.isck, &address.any, address_len);
+        if (result) |_| { } else |err|
+        {
+            // WouldBlock is ok
+            if (err != error.WouldBlock)
+            {
+                return err;
+            }
+        }
+        try log.logln(log.LogLevel.info, @src(),
+                "connecting to host {s} sck {}",
+                .{g_influx_hostname, info.isck});
+        info.connecting = true;
+    }
+}
 
 //*****************************************************************************
 fn process_msg_table(info: *info_t, table_name: []const u8,
@@ -38,59 +93,16 @@ fn process_msg_table(info: *info_t, table_name: []const u8,
             "Content-Length: {}\r\n\r\n{s}",
             .{g_influx_database, g_influx_hostname, g_influx_port,
             g_influx_token, str1.len, str1});
-    if (info.sck == -1)
-    {
-        const port_u16: u16 = 8086;
-        const address_list = try std.net.getAddressList(g_allocator,
-                g_influx_hostname, port_u16);
-        defer address_list.deinit();
-        if (address_list.addrs.len < 1)
-        {
-            return error.InvalidParam;
-        }
-        const address = address_list.addrs[0];
-        const tpe: u32 = posix.SOCK.STREAM;
-        info.sck = try posix.socket(address.any.family, tpe, 0);
-        const address_len = address.getOsSockLen();
-        try posix.connect(info.sck, &address.any, address_len);
-        std.debug.print("connected host {s} sck {}\n",
-                .{g_influx_hostname, info.sck});
-    }
-    const sent = try posix.send(info.sck, str2, 0);
-    if (sent == str2.len)
-    {
-        const read = try posix.recv(info.sck, &info.buffer_in, 0);
-        if (read > 0)
-        {
-            const read_text = info.buffer_in[0..read];
-            const found = std.mem.containsAtLeast(u8, read_text, 1,
-                    "204 No Content");
-            if (found)
-            {
-                return;
-            }
-        }
-    }
-    return error.InvalidParam;
-}
 
-//*****************************************************************************
-fn process_msg_table_bool(info: *info_t, table_name: []const u8,
-        value: f32) bool
-{
-    const result = process_msg_table(info, table_name, value);
-    if (result) |_| { } else |err|
-    {
-        std.debug.print("process_msg_table {s} err {}\n", .{table_name, err});
-        if (info.sck != -1)
-        {
-            std.debug.print("closing sck {}\n", .{info.sck});
-            posix.close(info.sck);
-            info.sck = -1;
-        }
-        return false;
-    }
-    return true;
+    const s = try parse.create(&g_allocator, str2.len);
+    errdefer s.delete();
+    try s.check_rem(str2.len);
+    s.out_u8_slice(str2);
+    try s.reset(0);
+    const node = try g_allocator.create(DL.Node);
+    errdefer g_allocator.destroy(node);
+    node.* = .{.data = s};
+    info.out_queue.append(node);
 }
 
 //*****************************************************************************
@@ -114,20 +126,14 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             value = @floatFromInt(volts);
             value /= 10.0;
             table_name = "renogy_volts";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
             // amps
             try s.check_rem(2);
             const amps = s.in_u16_le();
             value = @floatFromInt(amps);
             value /= 100.0;
             table_name = "renogy_amps";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
             try s.check_rem(10);
             s.in_u8_skip(8); // temp, load
             // pvvolts
@@ -135,29 +141,20 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             value = @floatFromInt(pvvolts);
             value /= 10.0;
             table_name = "renogy_pvvolts";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
             // pvamps
             try s.check_rem(2);
             const pvamps = s.in_u16_le();
             value = @floatFromInt(pvamps);
             value /= 100.0;
             table_name = "renogy_pvamps";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
             // pvwatts
             try s.check_rem(2);
             const pvwatts = s.in_u16_le();
             value = @floatFromInt(pvwatts);
             table_name = "renogy_pvwatts";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
         }
     }
     else if ((type1 == 1) and (id == 3))
@@ -170,30 +167,21 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             value = @floatFromInt(pzem3volts);
             value /= 100;
             table_name = "pzem3_volts";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
             // amps
             try s.check_rem(2);
             const pzem3amps = s.in_u16_le();
             value = @floatFromInt(pzem3amps);
             value /= 100;
             table_name = "pzem3_amps";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
             // watts
             try s.check_rem(2);
             const pzem3watts = s.in_u16_le();
             value = @floatFromInt(pzem3watts);
             value /= 10;
             table_name = "pzem3_watts";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
         }
     }
     else if ((type1 == 1) and (id == 6))
@@ -206,88 +194,417 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             value = @floatFromInt(pzem6volts);
             value /= 100;
             table_name = "pzem6_volts";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
             // amps
             try s.check_rem(2);
             const pzem6amps = s.in_u16_le();
             value = @floatFromInt(pzem6amps);
             value /= 100;
             table_name = "pzem6_amps";
-            if (!process_msg_table_bool(info, table_name, value))
-            {
-                return;
-            }
+            try process_msg_table(info, table_name, value);
             // watts
             try s.check_rem(2);
             const pzem6watts = s.in_u16_le();
             value = @floatFromInt(pzem6watts);
             value /= 10;
             table_name = "pzem6_watts";
-            if (!process_msg_table_bool(info, table_name, value))
+            try process_msg_table(info, table_name, value);
+        }
+    }
+}
+
+//*****************************************************************************
+fn term_sig(_: c_int) callconv(.C) void
+{
+    const msg: [4]u8 = .{ 'i', 'n', 't', 0 };
+    _ = posix.write(g_term[1], msg[0..4]) catch return;
+}
+
+//*****************************************************************************
+fn pipe_sig(_: c_int) callconv(.C) void
+{
+}
+
+//*****************************************************************************
+fn setup_signals() !void
+{
+    g_term = try posix.pipe();
+    var sa: posix.Sigaction = undefined;
+    sa.mask = posix.empty_sigset;
+    sa.flags = 0;
+    sa.handler = .{ .handler = term_sig };
+    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
+    {
+        try posix.sigaction(posix.SIG.INT, &sa, null);
+        try posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{ .handler = pipe_sig };
+        try posix.sigaction(posix.SIG.PIPE, &sa, null);
+    }
+    else
+    {
+        posix.sigaction(posix.SIG.INT, &sa, null);
+        posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{ .handler = pipe_sig };
+        posix.sigaction(posix.SIG.PIPE, &sa, null);
+    }
+}
+
+//*****************************************************************************
+fn cleanup_signals() void
+{
+    posix.close(g_term[0]);
+    posix.close(g_term[1]);
+}
+
+//*****************************************************************************
+fn show_command_line_args() !void
+{
+    const app_name = std.mem.sliceTo(std.os.argv[0], 0);
+    const stdout = std.io.getStdOut();
+    const writer = stdout.writer();
+    const vstr = builtin.zig_version_string;
+    try writer.print("{s} - A tty subsriber\n", .{app_name});
+    try writer.print("built with zig version {s}\n", .{vstr});
+    try writer.print("Usage: {s} [options]\n", .{app_name});
+    try writer.print("  -h: print this help\n", .{});
+    try writer.print("  -F: run in foreground\n", .{});
+    try writer.print("  -D: run in background\n", .{});
+}
+
+//*****************************************************************************
+fn process_args() !void
+{
+    var slice_arg: []u8 = undefined;
+    var index: usize = 1;
+    const count = std.os.argv.len;
+    if (count < 2)
+    {
+        return error.ShowCommandLine;
+    }
+    while (index < count) : (index += 1)
+    {
+        slice_arg = std.mem.sliceTo(std.os.argv[index], 0);
+        if (std.mem.eql(u8, slice_arg, "-h"))
+        {
+            return error.ShowCommandLine;
+        }
+        else if (std.mem.eql(u8, slice_arg, "-D"))
+        {
+            g_deamonize = true;
+        }
+        else if (std.mem.eql(u8, slice_arg, "-F"))
+        {
+            g_deamonize = false;
+        }
+        else
+        {
+            return error.ShowCommandLine;
+        }
+    }
+}
+
+//*****************************************************************************
+fn process_csck_in(info: *info_t, ins: *parse.parse_t) !void
+{
+    const recv_rv = try posix.recv(info.csck,
+            ins.data[info.readed..info.to_read], 0);
+    if (recv_rv < 1)
+    {
+        return error.InvalidParam;
+    }
+    info.readed += recv_rv;
+    if (info.readed == info.to_read)
+    {
+        if (info.to_read == 4)
+        {
+            try ins.reset(0);
+            try ins.check_rem(4);
+            info.code = ins.in_u16_le();
+            info.size = ins.in_u16_le();
+            if (info.size <= 4)
             {
-                return;
+                return error.InvalidParam;
+            }
+            info.to_read = info.size;
+        }
+        else
+        {
+            if (info.code == 0)
+            {
+                const s = try parse.create_from_slice(&g_allocator,
+                        ins.data[4..info.readed]);
+                defer s.delete();
+                try process_msg(info, s);
+            }
+            info.readed = 0;
+            info.to_read = 4;
+        }
+    }
+}
+
+//*****************************************************************************
+fn process_isck_in(info: *info_t) !void
+{
+    const read = posix.recv(info.isck, &info.buffer_in, 0);
+    if (read) |aread|
+    {
+        try log.logln_devel(log.LogLevel.info, @src(),
+                "posix.recv rv {}", .{aread});
+        if (aread > 0)
+        {
+        }
+        else
+        {
+            return error.InvalidParam;
+        }
+    }
+    else |err|
+    {
+        // WouldBlock is ok
+        if (err != error.WouldBlock)
+        {
+            return err;
+        }
+    }
+}
+
+//*****************************************************************************
+fn process_isck_out(info: *info_t) !void
+{
+    if (info.out_queue.first) |anode|
+    {
+        const outs = anode.data;
+        const out_slice = outs.data[outs.offset..];
+        const sent = posix.send(info.isck, out_slice, 0);
+        if (sent) |asent|
+        {
+            try log.logln_devel(log.LogLevel.info, @src(),
+                    "posix.send rv {}", .{asent});
+            if (asent > 0)
+            {
+                outs.offset += asent;
+                if (outs.offset >= outs.data.len)
+                {
+                    info.out_queue.remove(anode);
+                    anode.data.delete();
+                    g_allocator.destroy(anode);
+                }
+            }
+            else
+            {
+                return error.InvalidParam;
+            }
+        }
+        else |err|
+        {
+            // WouldBlock is ok
+            if (err != error.WouldBlock)
+            {
+                return err;
             }
         }
     }
 }
 
 //*****************************************************************************
+fn clear_out_queue(info: *info_t) void
+{
+    while (info.out_queue.popFirst()) |anode|
+    {
+        anode.data.delete();
+        g_allocator.destroy(anode);
+    }
+}
+
+//*****************************************************************************
 pub fn main() !void
 {
-    std.debug.print("tty_reader_influx\n", .{});
-    const address = try net.Address.initUnix("/tmp/tty_reader.socket");
-    const tpe: u32 = posix.SOCK.STREAM;
-    const sck = try posix.socket(address.any.family, tpe, 0);
-    const address_len = address.getOsSockLen();
-    const result = try posix.connect(sck, &address.any, address_len);
-    _ = result;
-    const ins = try parse.create(&g_allocator, 64 * 1024);
-    defer ins.delete();
-    const recv_slice = ins.data;
+    var result = process_args();
+    if (result) |_| { } else |err|
+    {
+        if (err == error.ShowCommandLine)
+        {
+            try show_command_line_args();
+        }
+        return err;
+    }
+    if (g_deamonize)
+    {
+        const rv = try posix.fork();
+        if (rv == 0)
+        { // child
+            posix.close(0);
+            posix.close(1);
+            posix.close(2);
+            _ = try posix.open("/dev/null", .{.ACCMODE = .RDONLY}, 0);
+            _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
+            _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
+            try log.initWithFile(&g_allocator, log.LogLevel.debug,
+                    "/tmp/tty_reader_influx.log");
+        }
+        else if (rv > 0)
+        { // parent
+            std.debug.print("started with pid {}\n", .{rv});
+            return;
+        }
+    }
+    else
+    {
+        try log.init(&g_allocator, log.LogLevel.debug);
+    }
+    defer log.deinit();
+    try log.logln(log.LogLevel.info, @src(), "tty_reader_influx", .{});
+    // setup signals
+    try setup_signals();
+    defer cleanup_signals();
+    try log.logln(log.LogLevel.info, @src(), "signals init ok", .{});
+
     const info = try g_allocator.create(info_t);
     defer g_allocator.destroy(info);
     info.* = .{};
-    var code: u16 = 0;
-    var size: u16 = 0;
-    var to_read: usize = 4;
-    var readed: usize = 0;
+    info.out_queue = .{};
+
+    const address = try net.Address.initUnix("/tmp/tty_reader.socket");
+    const tpe: u32 = posix.SOCK.STREAM;
+    info.csck = try posix.socket(address.any.family, tpe, 0);
+    const address_len = address.getOsSockLen();
+    result = try posix.connect(info.csck, &address.any, address_len);
+
+    const ins = try parse.create(&g_allocator, 64 * 1024);
+    defer ins.delete();
+
+    const max_polls = 32;
+    var timeout: i32 = undefined;
+    var polls: [max_polls]posix.pollfd = undefined;
+    var poll_count: usize = undefined;
+
     while (true)
     {
-        const recv_rv = try posix.recv(sck, recv_slice[readed..to_read], 0);
-        if (recv_rv < 1)
+        timeout = -1;
+
+        // setup poll
+        poll_count = 0;
+        // setup terminate fd
+        const term_index = poll_count;
+        polls[poll_count].fd = g_term[0];
+        polls[poll_count].events = posix.POLL.IN;
+        polls[poll_count].revents = 0;
+        poll_count += 1;
+
+        // setup connect fd
+        const csck_index = poll_count;
+        polls[poll_count].fd = info.csck;
+        polls[poll_count].events = posix.POLL.IN;
+        polls[poll_count].revents = 0;
+        poll_count += 1;
+
+        // set influx fd if exists
+        var isck_index: ?usize = null;
+        if (info.isck != -1)
         {
-            break;
+            isck_index = poll_count;
+            polls[poll_count].fd = info.isck;
+            polls[poll_count].events = posix.POLL.IN;
+            polls[poll_count].revents = 0;
+            if ((info.out_queue.len > 0) or info.connecting)
+            {
+                // we have data to write
+                polls[poll_count].events |= posix.POLL.OUT;
+            }
+            poll_count += 1;
         }
-        readed += recv_rv;
-        if (readed == to_read)
+
+        const active_polls = polls[0..poll_count];
+        const poll_rv = try posix.poll(active_polls, timeout);
+
+        if (poll_rv > 0)
         {
-            if (to_read == 4)
+            if ((active_polls[term_index].revents & posix.POLL.IN) != 0)
             {
-                try ins.reset(0);
-                try ins.check_rem(4);
-                code = ins.in_u16_le();
-                size = ins.in_u16_le();
-                if (size <= 4)
-                {
-                    return error.InvalidParam;
-                }
-                to_read = size;
+                try log.logln(log.LogLevel.info, @src(), "{s}",
+                        .{"term set shutting down"});
+                break;
             }
-            else
+            if ((active_polls[csck_index].revents & posix.POLL.IN) != 0)
             {
-                if (code == 0)
+                if (connect_isck(info)) |_| { } else |err|
                 {
-                    const s = try parse.create_from_slice(&g_allocator,
-                            recv_slice[4..readed]);
-                    defer s.delete();
-                    try process_msg(info, s);
+                    if (info.isck != -1)
+                    {
+                        const sck = info.isck;
+                        posix.close(info.isck);
+                        info.isck = -1;
+                        try log.logln(log.LogLevel.info, @src(),
+                                "connect_isck err {}, close for sck {}",
+                                .{err, sck});
+                    }
+                    else
+                    {
+                        try log.logln(log.LogLevel.info, @src(),
+                            "connect_isck err {}", .{err});
+                    }
                 }
-                readed = 0;
-                to_read = 4;
+                try process_csck_in(info, ins);
             }
+            if (isck_index) |aisck_index|
+            {
+                if ((active_polls[aisck_index].revents & posix.POLL.IN) != 0)
+                {
+                    if (process_isck_in(info)) |_| { } else |err|
+                    {
+                        if (info.isck != -1)
+                        {
+                            const sck = info.isck;
+                            posix.close(info.isck);
+                            info.isck = -1;
+                            try log.logln(log.LogLevel.info, @src(),
+                                    "process_isck_in err {}, close for sck {}",
+                                    .{err, sck});
+                        }
+                        else
+                        {
+                            try log.logln(log.LogLevel.info, @src(),
+                                    "process_isck_in err {}", .{err});
+                        }
+                        info.connecting = false;
+                        isck_index = null;
+                    }
+                }
+            }
+            if (isck_index) |aisck_index|
+            {
+                if ((active_polls[aisck_index].revents & posix.POLL.OUT) != 0)
+                {
+                    if (info.connecting)
+                    {
+                        info.connecting = false;
+                        try log.logln(log.LogLevel.info, @src(),
+                                "sck {} got connected", .{info.isck});
+                    }
+                    if (process_isck_out(info)) |_| { } else |err|
+                    {
+                        if (info.isck != -1)
+                        {
+                            const sck = info.isck;
+                            posix.close(info.isck);
+                            info.isck = -1;
+                            try log.logln(log.LogLevel.info, @src(),
+                                    "process_isck_out err {}, close for sck {}",
+                                    .{err, sck});
+                        }
+                        else
+                        {
+                            try log.logln(log.LogLevel.info, @src(),
+                                    "process_isck_out err {}", .{err});
+                        }
+                    }
+                }
+            }
+        }
+        if (info.isck == -1)
+        {
+            clear_out_queue(info);
         }
     }
+    clear_out_queue(info);
 }

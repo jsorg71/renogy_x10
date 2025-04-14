@@ -56,7 +56,7 @@ pub fn build(b: *std.Build) void
     tty_reader_influx.root_module.addImport("hexdump", b.createModule(.{
         .root_source_file = b.path("common/hexdump.zig"),
     }));
-    tty_reader.root_module.addImport("log", b.createModule(.{
+    tty_reader_influx.root_module.addImport("log", b.createModule(.{
         .root_source_file = b.path("common/log.zig"),
     }));
     tty_reader_influx.root_module.addImport("parse", b.createModule(.{
