@@ -39,6 +39,96 @@ const info_t = struct
 };
 
 //*****************************************************************************
+fn term_sig(_: c_int) callconv(.C) void
+{
+    const msg: [4]u8 = .{ 'i', 'n', 't', 0 };
+    _ = posix.write(g_term[1], msg[0..4]) catch return;
+}
+
+//*****************************************************************************
+fn pipe_sig(_: c_int) callconv(.C) void
+{
+}
+
+//*****************************************************************************
+fn setup_signals() !void
+{
+    g_term = try posix.pipe();
+    var sa: posix.Sigaction = undefined;
+    sa.mask = posix.empty_sigset;
+    sa.flags = 0;
+    sa.handler = .{ .handler = term_sig };
+    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
+    {
+        try posix.sigaction(posix.SIG.INT, &sa, null);
+        try posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{ .handler = pipe_sig };
+        try posix.sigaction(posix.SIG.PIPE, &sa, null);
+    }
+    else
+    {
+        posix.sigaction(posix.SIG.INT, &sa, null);
+        posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{ .handler = pipe_sig };
+        posix.sigaction(posix.SIG.PIPE, &sa, null);
+    }
+}
+
+//*****************************************************************************
+fn cleanup_signals() void
+{
+    posix.close(g_term[0]);
+    posix.close(g_term[1]);
+}
+
+//*****************************************************************************
+fn show_command_line_args() !void
+{
+    const app_name = std.mem.sliceTo(std.os.argv[0], 0);
+    const stdout = std.io.getStdOut();
+    const writer = stdout.writer();
+    const vstr = builtin.zig_version_string;
+    try writer.print("{s} - A tty subsriber\n", .{app_name});
+    try writer.print("built with zig version {s}\n", .{vstr});
+    try writer.print("Usage: {s} [options]\n", .{app_name});
+    try writer.print("  -h: print this help\n", .{});
+    try writer.print("  -F: run in foreground\n", .{});
+    try writer.print("  -D: run in background\n", .{});
+}
+
+//*****************************************************************************
+fn process_args() !void
+{
+    var slice_arg: []u8 = undefined;
+    var index: usize = 1;
+    const count = std.os.argv.len;
+    if (count < 2)
+    {
+        return error.ShowCommandLine;
+    }
+    while (index < count) : (index += 1)
+    {
+        slice_arg = std.mem.sliceTo(std.os.argv[index], 0);
+        if (std.mem.eql(u8, slice_arg, "-h"))
+        {
+            return error.ShowCommandLine;
+        }
+        else if (std.mem.eql(u8, slice_arg, "-D"))
+        {
+            g_deamonize = true;
+        }
+        else if (std.mem.eql(u8, slice_arg, "-F"))
+        {
+            g_deamonize = false;
+        }
+        else
+        {
+            return error.ShowCommandLine;
+        }
+    }
+}
+
+//*****************************************************************************
 fn connect_isck(info: *info_t) !void
 {
     if (info.isck == -1)
@@ -214,96 +304,6 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
 }
 
 //*****************************************************************************
-fn term_sig(_: c_int) callconv(.C) void
-{
-    const msg: [4]u8 = .{ 'i', 'n', 't', 0 };
-    _ = posix.write(g_term[1], msg[0..4]) catch return;
-}
-
-//*****************************************************************************
-fn pipe_sig(_: c_int) callconv(.C) void
-{
-}
-
-//*****************************************************************************
-fn setup_signals() !void
-{
-    g_term = try posix.pipe();
-    var sa: posix.Sigaction = undefined;
-    sa.mask = posix.empty_sigset;
-    sa.flags = 0;
-    sa.handler = .{ .handler = term_sig };
-    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
-    {
-        try posix.sigaction(posix.SIG.INT, &sa, null);
-        try posix.sigaction(posix.SIG.TERM, &sa, null);
-        sa.handler = .{ .handler = pipe_sig };
-        try posix.sigaction(posix.SIG.PIPE, &sa, null);
-    }
-    else
-    {
-        posix.sigaction(posix.SIG.INT, &sa, null);
-        posix.sigaction(posix.SIG.TERM, &sa, null);
-        sa.handler = .{ .handler = pipe_sig };
-        posix.sigaction(posix.SIG.PIPE, &sa, null);
-    }
-}
-
-//*****************************************************************************
-fn cleanup_signals() void
-{
-    posix.close(g_term[0]);
-    posix.close(g_term[1]);
-}
-
-//*****************************************************************************
-fn show_command_line_args() !void
-{
-    const app_name = std.mem.sliceTo(std.os.argv[0], 0);
-    const stdout = std.io.getStdOut();
-    const writer = stdout.writer();
-    const vstr = builtin.zig_version_string;
-    try writer.print("{s} - A tty subsriber\n", .{app_name});
-    try writer.print("built with zig version {s}\n", .{vstr});
-    try writer.print("Usage: {s} [options]\n", .{app_name});
-    try writer.print("  -h: print this help\n", .{});
-    try writer.print("  -F: run in foreground\n", .{});
-    try writer.print("  -D: run in background\n", .{});
-}
-
-//*****************************************************************************
-fn process_args() !void
-{
-    var slice_arg: []u8 = undefined;
-    var index: usize = 1;
-    const count = std.os.argv.len;
-    if (count < 2)
-    {
-        return error.ShowCommandLine;
-    }
-    while (index < count) : (index += 1)
-    {
-        slice_arg = std.mem.sliceTo(std.os.argv[index], 0);
-        if (std.mem.eql(u8, slice_arg, "-h"))
-        {
-            return error.ShowCommandLine;
-        }
-        else if (std.mem.eql(u8, slice_arg, "-D"))
-        {
-            g_deamonize = true;
-        }
-        else if (std.mem.eql(u8, slice_arg, "-F"))
-        {
-            g_deamonize = false;
-        }
-        else
-        {
-            return error.ShowCommandLine;
-        }
-    }
-}
-
-//*****************************************************************************
 fn process_csck_in(info: *info_t, ins: *parse.parse_t) !void
 {
     const recv_rv = try posix.recv(info.csck,
@@ -417,6 +417,167 @@ fn clear_out_queue(info: *info_t) void
 }
 
 //*****************************************************************************
+fn csck_can_recv(info: *info_t, ins: *parse.parse_t) !void
+{
+    // try to connect to influx if not connected
+    if (connect_isck(info)) |_| { } else |err|
+    {
+        if (info.isck != -1)
+        {
+            const sck = info.isck;
+            posix.close(info.isck);
+            info.isck = -1;
+            try log.logln(log.LogLevel.info, @src(),
+                    "connect_isck err {}, close for sck {}",
+                    .{err, sck});
+        }
+        else
+        {
+            try log.logln(log.LogLevel.info, @src(),
+                    "connect_isck err {}", .{err});
+        }
+    }
+    try process_csck_in(info, ins);
+}
+
+//*****************************************************************************
+fn isck_can_recv(info: *info_t, isck_index: *?usize) !void
+{
+    if (process_isck_in(info)) |_| { } else |err|
+    {
+        if (info.isck != -1)
+        {
+            const sck = info.isck;
+            posix.close(info.isck);
+            info.isck = -1;
+            try log.logln(log.LogLevel.info, @src(),
+                    "process_isck_in err {}, close for sck {}",
+                    .{err, sck});
+        }
+        else
+        {
+            try log.logln(log.LogLevel.info, @src(),
+                    "process_isck_in err {}", .{err});
+        }
+        info.connecting = false;
+        isck_index.* = null;
+    }
+}
+
+//*****************************************************************************
+fn isck_can_send(info: *info_t) !void
+{
+    if (info.connecting)
+    {
+        info.connecting = false;
+        try log.logln(log.LogLevel.info, @src(),
+                "sck {} got connected", .{info.isck});
+    }
+    if (process_isck_out(info)) |_| { } else |err|
+    {
+        if (info.isck != -1)
+        {
+            const sck = info.isck;
+            posix.close(info.isck);
+            info.isck = -1;
+            try log.logln(log.LogLevel.info, @src(),
+                    "process_isck_out err {}, close for sck {}",
+                    .{err, sck});
+        }
+        else
+        {
+            try log.logln(log.LogLevel.info, @src(),
+                    "process_isck_out err {}", .{err});
+        }
+    }
+}
+
+//*****************************************************************************
+fn main_loop(info: *info_t, ins: *parse.parse_t) !void
+{
+    const max_polls = 32;
+    var timeout: i32 = undefined;
+    var polls: [max_polls]posix.pollfd = undefined;
+    var poll_count: usize = undefined;
+
+    while (true)
+    {
+        try log.logln_devel(log.LogLevel.info, @src(),
+                "loop out_queue len {}",
+                .{info.out_queue.len});
+
+        timeout = -1;
+
+        // setup poll
+        poll_count = 0;
+        // setup terminate fd
+        const term_index = poll_count;
+        polls[poll_count].fd = g_term[0];
+        polls[poll_count].events = posix.POLL.IN;
+        polls[poll_count].revents = 0;
+        poll_count += 1;
+
+        // setup connect fd
+        const csck_index = poll_count;
+        polls[poll_count].fd = info.csck;
+        polls[poll_count].events = posix.POLL.IN;
+        polls[poll_count].revents = 0;
+        poll_count += 1;
+
+        // set influx fd if exists
+        var isck_index: ?usize = null;
+        if (info.isck != -1)
+        {
+            isck_index = poll_count;
+            polls[poll_count].fd = info.isck;
+            polls[poll_count].events = posix.POLL.IN;
+            polls[poll_count].revents = 0;
+            if ((info.out_queue.len > 0) or info.connecting)
+            {
+                // we have data to write
+                polls[poll_count].events |= posix.POLL.OUT;
+            }
+            poll_count += 1;
+        }
+
+        const active_polls = polls[0..poll_count];
+        const poll_rv = try posix.poll(active_polls, timeout);
+
+        if (poll_rv > 0)
+        {
+            if ((active_polls[term_index].revents & posix.POLL.IN) != 0)
+            {
+                try log.logln(log.LogLevel.info, @src(), "{s}",
+                        .{"term set shutting down"});
+                break;
+            }
+            if ((active_polls[csck_index].revents & posix.POLL.IN) != 0)
+            {
+                try csck_can_recv(info, ins);
+            }
+            if (isck_index) |aisck_index|
+            {
+                if ((active_polls[aisck_index].revents & posix.POLL.IN) != 0)
+                {
+                    try isck_can_recv(info, &isck_index);
+                }
+            }
+            if (isck_index) |aisck_index|
+            {
+                if ((active_polls[aisck_index].revents & posix.POLL.OUT) != 0)
+                {
+                    try isck_can_send(info);
+                }
+            }
+        }
+        if (info.isck == -1)
+        {
+            clear_out_queue(info);
+        }
+    }
+}
+
+//*****************************************************************************
 pub fn main() !void
 {
     var result = process_args();
@@ -473,138 +634,7 @@ pub fn main() !void
     const ins = try parse.create(&g_allocator, 64 * 1024);
     defer ins.delete();
 
-    const max_polls = 32;
-    var timeout: i32 = undefined;
-    var polls: [max_polls]posix.pollfd = undefined;
-    var poll_count: usize = undefined;
+    try main_loop(info, ins);
 
-    while (true)
-    {
-        timeout = -1;
-
-        // setup poll
-        poll_count = 0;
-        // setup terminate fd
-        const term_index = poll_count;
-        polls[poll_count].fd = g_term[0];
-        polls[poll_count].events = posix.POLL.IN;
-        polls[poll_count].revents = 0;
-        poll_count += 1;
-
-        // setup connect fd
-        const csck_index = poll_count;
-        polls[poll_count].fd = info.csck;
-        polls[poll_count].events = posix.POLL.IN;
-        polls[poll_count].revents = 0;
-        poll_count += 1;
-
-        // set influx fd if exists
-        var isck_index: ?usize = null;
-        if (info.isck != -1)
-        {
-            isck_index = poll_count;
-            polls[poll_count].fd = info.isck;
-            polls[poll_count].events = posix.POLL.IN;
-            polls[poll_count].revents = 0;
-            if ((info.out_queue.len > 0) or info.connecting)
-            {
-                // we have data to write
-                polls[poll_count].events |= posix.POLL.OUT;
-            }
-            poll_count += 1;
-        }
-
-        const active_polls = polls[0..poll_count];
-        const poll_rv = try posix.poll(active_polls, timeout);
-
-        if (poll_rv > 0)
-        {
-            if ((active_polls[term_index].revents & posix.POLL.IN) != 0)
-            {
-                try log.logln(log.LogLevel.info, @src(), "{s}",
-                        .{"term set shutting down"});
-                break;
-            }
-            if ((active_polls[csck_index].revents & posix.POLL.IN) != 0)
-            {
-                if (connect_isck(info)) |_| { } else |err|
-                {
-                    if (info.isck != -1)
-                    {
-                        const sck = info.isck;
-                        posix.close(info.isck);
-                        info.isck = -1;
-                        try log.logln(log.LogLevel.info, @src(),
-                                "connect_isck err {}, close for sck {}",
-                                .{err, sck});
-                    }
-                    else
-                    {
-                        try log.logln(log.LogLevel.info, @src(),
-                            "connect_isck err {}", .{err});
-                    }
-                }
-                try process_csck_in(info, ins);
-            }
-            if (isck_index) |aisck_index|
-            {
-                if ((active_polls[aisck_index].revents & posix.POLL.IN) != 0)
-                {
-                    if (process_isck_in(info)) |_| { } else |err|
-                    {
-                        if (info.isck != -1)
-                        {
-                            const sck = info.isck;
-                            posix.close(info.isck);
-                            info.isck = -1;
-                            try log.logln(log.LogLevel.info, @src(),
-                                    "process_isck_in err {}, close for sck {}",
-                                    .{err, sck});
-                        }
-                        else
-                        {
-                            try log.logln(log.LogLevel.info, @src(),
-                                    "process_isck_in err {}", .{err});
-                        }
-                        info.connecting = false;
-                        isck_index = null;
-                    }
-                }
-            }
-            if (isck_index) |aisck_index|
-            {
-                if ((active_polls[aisck_index].revents & posix.POLL.OUT) != 0)
-                {
-                    if (info.connecting)
-                    {
-                        info.connecting = false;
-                        try log.logln(log.LogLevel.info, @src(),
-                                "sck {} got connected", .{info.isck});
-                    }
-                    if (process_isck_out(info)) |_| { } else |err|
-                    {
-                        if (info.isck != -1)
-                        {
-                            const sck = info.isck;
-                            posix.close(info.isck);
-                            info.isck = -1;
-                            try log.logln(log.LogLevel.info, @src(),
-                                    "process_isck_out err {}, close for sck {}",
-                                    .{err, sck});
-                        }
-                        else
-                        {
-                            try log.logln(log.LogLevel.info, @src(),
-                                    "process_isck_out err {}", .{err});
-                        }
-                    }
-                }
-            }
-        }
-        if (info.isck == -1)
-        {
-            clear_out_queue(info);
-        }
-    }
     clear_out_queue(info);
 }
