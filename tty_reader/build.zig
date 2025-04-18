@@ -64,6 +64,26 @@ pub fn build(b: *std.Build) void
     }));
     setExtraLibraryPaths(tty_reader_influx, target);
     b.installArtifact(tty_reader_influx);
+    // tty_reader_heyu
+    const tty_reader_heyu = b.addExecutable(.{
+        .name = "tty_reader_heyu",
+        .root_source_file = b.path("tty_reader_heyu.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = true,
+    });
+    tty_reader_heyu.linkLibC();
+    tty_reader_heyu.root_module.addImport("hexdump", b.createModule(.{
+        .root_source_file = b.path("common/hexdump.zig"),
+    }));
+    tty_reader_heyu.root_module.addImport("log", b.createModule(.{
+        .root_source_file = b.path("common/log.zig"),
+    }));
+    tty_reader_heyu.root_module.addImport("parse", b.createModule(.{
+        .root_source_file = b.path("common/parse.zig"),
+    }));
+    setExtraLibraryPaths(tty_reader_heyu, target);
+    b.installArtifact(tty_reader_heyu);
 }
 
 fn setExtraLibraryPaths(compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void
