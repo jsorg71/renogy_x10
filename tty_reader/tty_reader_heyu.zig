@@ -126,6 +126,30 @@ fn process_args() !void
 }
 
 //*****************************************************************************
+fn charger_on() !void
+{
+    const cmdline = [_][]const u8{ "heyu", "on", "A2" };
+    const rv = try std.process.Child.run(
+            .{.allocator = g_allocator, .argv = &cmdline});
+    defer g_allocator.free(rv.stdout);
+    defer g_allocator.free(rv.stderr);
+    try log.logln(log.LogLevel.info, @src(),
+            "rv from [heyu on A2] {}", .{rv.term.Exited});
+}
+
+//*****************************************************************************
+fn charger_off() !void
+{
+    const cmdline = [_][]const u8{ "heyu", "off", "A2" };
+    const rv = try std.process.Child.run(
+            .{.allocator = g_allocator, .argv = &cmdline});
+    defer g_allocator.free(rv.stdout);
+    defer g_allocator.free(rv.stderr);
+    try log.logln(log.LogLevel.info, @src(),
+            "rv from [heyu off A2] {}", .{rv.term.Exited});
+}
+
+//*****************************************************************************
 fn process_msg(info: *info_t, s: *parse.parse_t) !void
 {
     var value: f32 = undefined;
@@ -155,14 +179,7 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
                     const now = std.time.milliTimestamp();
                     info.charger_on_time = now;
                     info.charger_off_time = now + g_millis_on;
-                    const cmdline = [_][]const u8{ "heyu", "on", "A2" };
-                    const rv = try std.process.Child.run(
-                            .{.allocator = g_allocator, .argv = &cmdline});
-                    defer g_allocator.free(rv.stdout);
-                    defer g_allocator.free(rv.stderr);
-                    try log.logln(log.LogLevel.info, @src(),
-                            "rv from [heyu on A2] {}", .{rv.term.Exited});
-
+                    try charger_on();
                 }
             }
         }
@@ -233,7 +250,7 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
             const now = std.time.milliTimestamp();
             timeout = @intCast(info.charger_off_time - now);
             timeout = if (timeout < 0) 0 else timeout;
-            try log.logln(log.LogLevel.info, @src(),
+            try log.logln_devel(log.LogLevel.info, @src(),
                     "timeout {}", .{timeout});
         }
 
@@ -278,13 +295,7 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
                 try log.logln(log.LogLevel.info, @src(),
                         "turning off charger", .{});
                 info.state = state_t.LookingForLow;
-                const cmdline = [_][]const u8{ "heyu", "off", "A2" };
-                const rv = try std.process.Child.run(
-                        .{.allocator = g_allocator, .argv = &cmdline});
-                defer g_allocator.free(rv.stdout);
-                defer g_allocator.free(rv.stderr);
-                try log.logln(log.LogLevel.info, @src(),
-                        "rv from [heyu off A2] {}", .{rv.term.Exited});
+                try charger_off();
             }
         }
 
@@ -348,4 +359,9 @@ pub fn main() !void
     defer ins.delete();
 
     try main_loop(info, ins);
+
+    if (info.state == state_t.Charging)
+    {
+        try charger_off();
+    }
 }
