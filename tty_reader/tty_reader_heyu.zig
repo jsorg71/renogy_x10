@@ -6,12 +6,11 @@ const parse = @import("parse");
 const net = std.net;
 const posix = std.posix;
 
-const c = @cImport({
-    @cInclude("stdlib.h");
-});
-
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
+
+const g_low_voltage_on: f32 = 26.1;
+const g_millis_on: i32 = 4 * 60 * 60 * 1000;
 
 var g_deamonize: bool = false;
 
@@ -148,17 +147,21 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             // heyu here
             if (info.state == state_t.LookingForLow)
             {
-                //if (value < 26.0)
-                if (value < 27.0)
+                if (value < g_low_voltage_on)
                 {
-                    try log.logln(log.LogLevel.info, @src(), "turning on charger", .{});
+                    try log.logln(log.LogLevel.info, @src(),
+                            "turning on charger", .{});
                     info.state = state_t.Charging;
-                    info.charger_on_time = std.time.milliTimestamp();
-                    // turn off in 4 hours
-                    //info.charger_off_time = info.charger_on_time + 4 * 60 * 60 * 1000;
-                    info.charger_off_time = info.charger_on_time + 60 * 1000;
-                    const result = c.system("heyu on A2");
-                    try log.logln(log.LogLevel.info, @src(), "rv from [heyu on A2] {}", .{result});
+                    const now = std.time.milliTimestamp();
+                    info.charger_on_time = now;
+                    info.charger_off_time = now + g_millis_on;
+                    const cmdline = [_][]const u8{ "heyu", "on", "A2" };
+                    const rv = try std.process.Child.run(
+                            .{.allocator = g_allocator, .argv = &cmdline});
+                    defer g_allocator.free(rv.stdout);
+                    defer g_allocator.free(rv.stderr);
+                    try log.logln(log.LogLevel.info, @src(),
+                            "rv from [heyu on A2] {}", .{rv.term.Exited});
 
                 }
             }
@@ -229,11 +232,9 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
         {
             const now = std.time.milliTimestamp();
             timeout = @intCast(info.charger_off_time - now);
-            if (timeout < 0)
-            {
-                timeout = 0;
-            }
-            try log.logln_devel(log.LogLevel.info, @src(), "timeout {}", .{timeout});
+            timeout = if (timeout < 0) 0 else timeout;
+            try log.logln(log.LogLevel.info, @src(),
+                    "timeout {}", .{timeout});
         }
 
         // setup poll
@@ -274,10 +275,16 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
             const now = std.time.milliTimestamp();
             if (now >= info.charger_off_time)
             {
-                try log.logln(log.LogLevel.info, @src(), "turning off charger", .{});
+                try log.logln(log.LogLevel.info, @src(),
+                        "turning off charger", .{});
                 info.state = state_t.LookingForLow;
-                const result = c.system("heyu off A2");
-                try log.logln(log.LogLevel.info, @src(), "rv from [heyu off A2] {}", .{result});
+                const cmdline = [_][]const u8{ "heyu", "off", "A2" };
+                const rv = try std.process.Child.run(
+                        .{.allocator = g_allocator, .argv = &cmdline});
+                defer g_allocator.free(rv.stdout);
+                defer g_allocator.free(rv.stderr);
+                try log.logln(log.LogLevel.info, @src(),
+                        "rv from [heyu off A2] {}", .{rv.term.Exited});
             }
         }
 
