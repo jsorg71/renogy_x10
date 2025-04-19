@@ -9,8 +9,12 @@ const posix = std.posix;
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
 
+// low voltage when charger is turned on
 const g_low_voltage_on: f32 = 26.1;
+// time charger is on in milliseconds
 const g_millis_on: i32 = 4 * 60 * 60 * 1000;
+// charger Home Unit
+const g_charger_HU = "A2";
 
 var g_deamonize: bool = false;
 
@@ -128,7 +132,7 @@ fn process_args() !void
 //*****************************************************************************
 fn charger_on() !void
 {
-    const cmdline = [_][]const u8{ "heyu", "on", "A2" };
+    const cmdline = [_][]const u8{ "heyu", "on", g_charger_HU };
     const rv = try std.process.Child.run(
             .{.allocator = g_allocator, .argv = &cmdline});
     defer g_allocator.free(rv.stdout);
@@ -140,7 +144,7 @@ fn charger_on() !void
 //*****************************************************************************
 fn charger_off() !void
 {
-    const cmdline = [_][]const u8{ "heyu", "off", "A2" };
+    const cmdline = [_][]const u8{ "heyu", "off", g_charger_HU };
     const rv = try std.process.Child.run(
             .{.allocator = g_allocator, .argv = &cmdline});
     defer g_allocator.free(rv.stdout);
