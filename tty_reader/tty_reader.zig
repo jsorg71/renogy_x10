@@ -16,6 +16,7 @@ pub var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
 const g_tty_name_max_length = 128;
 var g_deamonize: bool = false;
+var g_config_file: [128:0]u8 = .{'t', 't', 'y', '0', '.', 't', 'o', 'm', 'l'} ++ .{ 0 } ** 119;
 
 pub const TtyError = error
 {
@@ -613,6 +614,20 @@ fn process_args() !void
         {
             g_deamonize = false;
         }
+        else if (std.mem.eql(u8, slice_arg, "-c"))
+        {
+            if (index + 1 < count)
+            {
+                const slice_arg1 = std.mem.sliceTo(std.os.argv[index + 1], 0);
+                if (slice_arg1.len < g_config_file.len)
+                {
+                    @memset(&g_config_file, 0);
+                    std.mem.copyForwards(u8, &g_config_file, slice_arg1);
+                    continue;
+                }
+            }
+            return error.ShowCommandLine;
+        }
         else
         {
             return error.ShowCommandLine;
@@ -665,7 +680,8 @@ pub fn main() !void
     var tty_info: tty_info_t = undefined;
     try tty_info.init();
     defer tty_info.deinit();
-    try toml.setup_tty_info(&g_allocator, &tty_info);
+    const config_file = std.mem.sliceTo(&g_config_file, 0);
+    try toml.setup_tty_info(&g_allocator, &tty_info, config_file);
     try print_tty_info(&tty_info);
     // setup listen socket
     const listen_socket = std.mem.sliceTo(&tty_info.listen_socket, 0);

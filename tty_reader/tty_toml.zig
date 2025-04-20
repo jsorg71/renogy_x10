@@ -16,7 +16,6 @@ pub const TomlError = error
 
 var g_allocator: *const std.mem.Allocator = undefined;
 const g_error_buf_size: usize = 1024;
-const g_config_file = "tty0.toml";
 
 //*****************************************************************************
 inline fn err_if(b: bool, err: TomlError) !void
@@ -76,17 +75,17 @@ fn toml_free(ptr: ?*anyopaque) callconv(.C) void
 
 //*****************************************************************************
 pub fn setup_tty_info(allocator: *const std.mem.Allocator,
-        info: *tty.tty_info_t) !void
+        info: *tty.tty_info_t, config_file: []const u8) !void
 {
     try log.logln(log.LogLevel.info, @src(),
-            "config file [{s}]", .{g_config_file});
+            "config file [{s}]", .{config_file});
     g_allocator = allocator;
     c.toml_set_memutil(toml_malloc, toml_free);
-    const table = try load_tty_config(g_config_file);
+    const table = try load_tty_config(config_file);
     defer c.toml_free(table);
     try log.logln(log.LogLevel.info, @src(),
             "load_tty_config ok for file [{s}]",
-            .{g_config_file});
+            .{config_file});
     var index: c_int = 0;
     while (c.toml_key_in(table, index)) |akey| : (index += 1)
     {
