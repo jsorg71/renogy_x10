@@ -616,9 +616,10 @@ fn process_args() !void
         }
         else if (std.mem.eql(u8, slice_arg, "-c"))
         {
-            if (index + 1 < count)
+            index += 1;
+            if (index < count)
             {
-                const slice_arg1 = std.mem.sliceTo(std.os.argv[index + 1], 0);
+                const slice_arg1 = std.mem.sliceTo(std.os.argv[index], 0);
                 if (slice_arg1.len < g_config_file.len)
                 {
                     @memset(&g_config_file, 0);
