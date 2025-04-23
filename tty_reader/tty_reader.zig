@@ -16,7 +16,7 @@ pub var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
 const g_tty_name_max_length = 128;
 var g_deamonize: bool = false;
-var g_config_file: [128:0]u8 = .{'t', 't', 'y', '0', '.', 't', 'o', 'm', 'l'} ++ .{ 0 } ** 119;
+var g_config_file: [128:0]u8 = .{'t', 't', 'y', '0', '.', 't', 'o', 'm', 'l'} ++ .{0} ** 119;
 
 pub const TtyError = error
 {
@@ -166,7 +166,7 @@ fn sleep(mstime: i32) !void
 //*****************************************************************************
 fn term_sig(_: c_int) callconv(.C) void
 {
-    const msg: [4]u8 = .{ 'i', 'n', 't', 0 };
+    const msg: [4]u8 = .{'i', 'n', 't', 0};
     _ = posix.write(g_term[1], msg[0..4]) catch return;
 }
 
@@ -182,19 +182,19 @@ fn setup_signals() !void
     var sa: posix.Sigaction = undefined;
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
-    sa.handler = .{ .handler = term_sig };
+    sa.handler = .{.handler = term_sig};
     if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);
-        sa.handler = .{ .handler = pipe_sig };
+        sa.handler = .{.handler = pipe_sig};
         try posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
     else
     {
         posix.sigaction(posix.SIG.INT, &sa, null);
         posix.sigaction(posix.SIG.TERM, &sa, null);
-        sa.handler = .{ .handler = pipe_sig };
+        sa.handler = .{.handler = pipe_sig};
         posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
 }

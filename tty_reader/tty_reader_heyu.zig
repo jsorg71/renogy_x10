@@ -42,7 +42,7 @@ const info_t = struct
 //*****************************************************************************
 fn term_sig(_: c_int) callconv(.C) void
 {
-    const msg: [4]u8 = .{ 'i', 'n', 't', 0 };
+    const msg: [4]u8 = .{'i', 'n', 't', 0};
     _ = posix.write(g_term[1], msg[0..4]) catch return;
 }
 
@@ -58,19 +58,19 @@ fn setup_signals() !void
     var sa: posix.Sigaction = undefined;
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
-    sa.handler = .{ .handler = term_sig };
+    sa.handler = .{.handler = term_sig};
     if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);
-        sa.handler = .{ .handler = pipe_sig };
+        sa.handler = .{.handler = pipe_sig};
         try posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
     else
     {
         posix.sigaction(posix.SIG.INT, &sa, null);
         posix.sigaction(posix.SIG.TERM, &sa, null);
-        sa.handler = .{ .handler = pipe_sig };
+        sa.handler = .{.handler = pipe_sig};
         posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
 }
@@ -132,25 +132,25 @@ fn process_args() !void
 //*****************************************************************************
 fn charger_on() !void
 {
-    const cmdline = [_][]const u8{ "heyu", "on", g_charger_HU };
+    const cmdline = [_][]const u8{"heyu", "on", g_charger_HU};
     const rv = try std.process.Child.run(
             .{.allocator = g_allocator, .argv = &cmdline});
     defer g_allocator.free(rv.stdout);
     defer g_allocator.free(rv.stderr);
     try log.logln(log.LogLevel.info, @src(),
-            "rv from [heyu on A2] {}", .{rv.term.Exited});
+            "rv from [heyu on {s}] {}", .{g_charger_HU, rv.term.Exited});
 }
 
 //*****************************************************************************
 fn charger_off() !void
 {
-    const cmdline = [_][]const u8{ "heyu", "off", g_charger_HU };
+    const cmdline = [_][]const u8{"heyu", "off", g_charger_HU};
     const rv = try std.process.Child.run(
             .{.allocator = g_allocator, .argv = &cmdline});
     defer g_allocator.free(rv.stdout);
     defer g_allocator.free(rv.stderr);
     try log.logln(log.LogLevel.info, @src(),
-            "rv from [heyu off A2] {}", .{rv.term.Exited});
+            "rv from [heyu off {s}] {}", .{g_charger_HU, rv.term.Exited});
 }
 
 //*****************************************************************************

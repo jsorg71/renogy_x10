@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void
     });
     tty_reader.linkLibC();
     tty_reader.addIncludePath(b.path("."));
-    tty_reader.addCSourceFiles(.{ .files = libtomlc_files });
+    tty_reader.addCSourceFiles(.{.files = libtomlc_files});
     tty_reader.linkSystemLibrary("modbus");
     tty_reader.root_module.addImport("hexdump", b.createModule(.{
         .root_source_file = b.path("common/hexdump.zig"),
