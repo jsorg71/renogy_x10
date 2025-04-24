@@ -33,11 +33,11 @@ fn load_tty_config(file_name: []const u8) !*c.toml_table_t
     var buf_reader = std.io.bufferedReader(file.reader());
     var in_stream = buf_reader.reader();
     var buf: []u8 = undefined;
-    buf = try tty.g_allocator.alloc(u8, file_size + 1);
-    defer tty.g_allocator.free(buf);
+    buf = try g_allocator.alloc(u8, file_size + 1);
+    defer g_allocator.free(buf);
     var errbuf: []u8 = undefined;
-    errbuf = try tty.g_allocator.alloc(u8, g_error_buf_size);
-    defer tty.g_allocator.free(errbuf);
+    errbuf = try g_allocator.alloc(u8, g_error_buf_size);
+    defer g_allocator.free(errbuf);
     const bytes_read = try in_stream.read(buf);
     try log.logln(log.LogLevel.info, @src(),
             "file_size {} bytes read {}", .{file_size, bytes_read});

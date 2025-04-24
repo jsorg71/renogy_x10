@@ -12,7 +12,7 @@ const c = @cImport(
     @cInclude("modbus/modbus.h");
 });
 
-pub var g_allocator: std.mem.Allocator = std.heap.c_allocator;
+var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
 const g_tty_name_max_length = 128;
 var g_deamonize: bool = false;
