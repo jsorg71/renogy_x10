@@ -16,7 +16,8 @@ var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
 const g_tty_name_max_length = 128;
 var g_deamonize: bool = false;
-var g_config_file: [128:0]u8 = .{'t', 't', 'y', '0', '.', 't', 'o', 'm', 'l'} ++ .{0} ** 119;
+var g_config_file: [128:0]u8 =
+        .{'t', 't', 'y', '0', '.', 't', 'o', 'm', 'l'} ++ .{0} ** 119;
 
 pub const TtyError = error
 {
@@ -407,8 +408,8 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
                     "POLL.IN set for sck {}", .{fd});
             const peer = try get_peer_by_sck(info, fd);
             const in_slice = peer.ins.data[peer.ins.offset..];
-            const sent = try posix.recv(peer.sck, in_slice, 0);
-            if (sent < 1)
+            const read = try posix.recv(peer.sck, in_slice, 0);
+            if (read < 1)
             {
                 try log.logln(log.LogLevel.info, @src(),
                         "delme set for sck {}", .{fd});
