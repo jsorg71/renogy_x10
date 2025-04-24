@@ -13,6 +13,8 @@ var g_term: [2]i32 = .{-1, -1};
 const g_low_voltage_on: f32 = 26.1;
 // time charger is on in milliseconds
 const g_millis_on: i32 = 4 * 60 * 60 * 1000;
+// path to heyu
+const g_charger_exe = "/usr/local/bin/heyu";
 // charger Home Unit
 const g_charger_HU = "A2";
 
@@ -132,25 +134,29 @@ fn process_args() !void
 //*****************************************************************************
 fn charger_on() !void
 {
-    const cmdline = [_][]const u8{"heyu", "on", g_charger_HU};
+    const cmdline = [_][]const u8{g_charger_exe, "on", g_charger_HU};
     const rv = try std.process.Child.run(
             .{.allocator = g_allocator, .argv = &cmdline});
     defer g_allocator.free(rv.stdout);
     defer g_allocator.free(rv.stderr);
     try log.logln(log.LogLevel.info, @src(),
-            "rv from [heyu on {s}] {}", .{g_charger_HU, rv.term.Exited});
+            "rv from [{s} on {s}] {} stdout {s} stderr {s}",
+            .{g_charger_exe, g_charger_HU, rv.term.Exited,
+            rv.stdout, rv.stderr});
 }
 
 //*****************************************************************************
 fn charger_off() !void
 {
-    const cmdline = [_][]const u8{"heyu", "off", g_charger_HU};
+    const cmdline = [_][]const u8{g_charger_exe, "off", g_charger_HU};
     const rv = try std.process.Child.run(
             .{.allocator = g_allocator, .argv = &cmdline});
     defer g_allocator.free(rv.stdout);
     defer g_allocator.free(rv.stderr);
     try log.logln(log.LogLevel.info, @src(),
-            "rv from [heyu off {s}] {}", .{g_charger_HU, rv.term.Exited});
+            "rv from [{s} off {s}] {} stdout {s} stderr {s}",
+            .{g_charger_exe, g_charger_HU, rv.term.Exited,
+            rv.stdout, rv.stderr});
 }
 
 //*****************************************************************************
