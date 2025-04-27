@@ -58,7 +58,7 @@ fn setup_signals() !void
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
     sa.handler = .{.handler = term_sig};
-    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
+    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor == 13))
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);
@@ -170,10 +170,10 @@ fn connect_isck(info: *info_t) !void
 
 //*****************************************************************************
 fn process_msg_table(info: *info_t, table_name: []const u8,
-        voltage: f32) !void
+        value: f32) !void
 {
     const str1 = try std.fmt.bufPrint(&info.buffer_con,
-            "{s},host=serverA value={d:.2}\n", .{table_name, voltage});
+            "{s},host=serverA value={d:.2}\n", .{table_name, value});
     const str2 = try std.fmt.bufPrint(&info.buffer_out,
             "POST /api/v2/write?org=org1&bucket={s} HTTP/1.1\r\n" ++
             "Host: {s}:{}\r\n" ++
@@ -207,7 +207,7 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
     const count = s.in_u16_le();
     if ((type1 == 0) and (id == 1))
     {
-        if (address1 == 256 and count == 10)
+        if ((address1 == 256) and (count == 10))
         {
             try s.check_rem(4);
             s.in_u8_skip(2); // percent
@@ -249,7 +249,7 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
     }
     else if ((type1 == 1) and (id == 3))
     {
-        if (address1 == 0 and count == 8)
+        if ((address1 == 0) and (count == 8))
         {
             // volts
             try s.check_rem(2);
@@ -276,7 +276,7 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
     }
     else if ((type1 == 1) and (id == 6))
     {
-        if (address1 == 0 and count == 8)
+        if ((address1 == 0) and (count == 8))
         {
             // volts
             try s.check_rem(2);

@@ -61,7 +61,7 @@ fn setup_signals() !void
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
     sa.handler = .{.handler = term_sig};
-    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
+    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor == 13))
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);

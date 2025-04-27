@@ -133,12 +133,12 @@ pub const tty_info_t = struct // just one of these
             return null;
         }
         const item = &self.id_list.items[self.id_list_index];
-        if (self.id_list_sub_index == 0 and item.read_count > 0)
+        if ((self.id_list_sub_index == 0) and (item.read_count > 0))
         {
             self.id_list_sub_index += 1;
             return item;
         }
-        if (self.id_list_sub_index == 1 and item.read_input_count > 0)
+        if ((self.id_list_sub_index == 1) and (item.read_input_count > 0))
         {
             self.id_list_sub_index += 1;
             return item;
@@ -184,7 +184,7 @@ fn setup_signals() !void
     sa.mask = posix.empty_sigset;
     sa.flags = 0;
     sa.handler = .{.handler = term_sig};
-    if (builtin.zig_version.major == 0 and builtin.zig_version.minor == 13)
+    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor == 13))
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);
