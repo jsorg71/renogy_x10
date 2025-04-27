@@ -85,8 +85,8 @@ pub const tty_info_t = struct // just one of these
     modbus_debug: bool = false,
     item_mstime: i64 = 0,
     list_mstime: i64 = 0,
-    tty: [g_tty_name_max_length]u8 = .{0} ** g_tty_name_max_length,
-    listen_socket: [g_tty_name_max_length]u8 = .{0} ** g_tty_name_max_length,
+    tty: [g_tty_name_max_length:0]u8 = .{0} ** g_tty_name_max_length,
+    listen_socket: [g_tty_name_max_length:0]u8 = .{0} ** g_tty_name_max_length,
     id_list: std.ArrayList(tty_id_info_t) = undefined,
     peer_list: std.ArrayList(tty_peer_info_t) = undefined,
     ctx: *c.modbus_t = undefined,
@@ -212,7 +212,7 @@ fn print_tty_info(info: *tty_info_t) !void
 {
     try log.logln(log.LogLevel.info, @src(),
             "tty info: tty_name [{s}] modbus_debug [{}]",
-            .{info.tty, info.modbus_debug});
+            .{std.mem.sliceTo(&info.tty, 0), info.modbus_debug});
     try log.logln(log.LogLevel.info, @src(),
             "  item_mstime [{}] list_mstime [{}]",
             .{info.item_mstime, info.list_mstime});
@@ -558,21 +558,27 @@ fn process_tty_info(info: *tty_info_t) !void
     try log.logln(log.LogLevel.info, @src(), "", .{});
     const er_mode: c.modbus_error_recovery_mode =
             c.MODBUS_ERROR_RECOVERY_LINK | c.MODBUS_ERROR_RECOVERY_PROTOCOL;
-    var err = c.modbus_set_error_recovery(info.ctx, er_mode);
-    try err_if(err != 0, TtyError.ModbusSetErrorRecoveryFailed);
-    err = c.modbus_get_response_timeout(info.ctx,
+    var modbus_err = c.modbus_set_error_recovery(info.ctx, er_mode);
+    try err_if(modbus_err != 0, TtyError.ModbusSetErrorRecoveryFailed);
+    modbus_err = c.modbus_get_response_timeout(info.ctx,
             &info.response_sec, &info.response_usec);
-    try err_if(err != 0, TtyError.ModbusGetResponseTimeoutFailed);
+    try err_if(modbus_err != 0, TtyError.ModbusGetResponseTimeoutFailed);
     try log.logln(log.LogLevel.info, @src(),
             "modbus_get_response_timeout: response_sec {} response_usec {}",
             .{info.response_sec, info.response_usec});
     info.min_mstime = (info.response_sec * 1000) + (info.response_usec / 1000);
-    err = c.modbus_connect(info.ctx);
-    try log.logln(log.LogLevel.info, @src(), "modbus_connect: err {}", .{err});
-    try err_if(err != 0, TtyError.ModbusConnectFailed);
-    err = c.modbus_set_debug(info.ctx, @intFromBool(info.modbus_debug));
-    try err_if(err != 0, TtyError.ModbusSetDebugFailed);
-    try tty_main_loop(info);
+    modbus_err = c.modbus_connect(info.ctx);
+    try log.logln(log.LogLevel.info, @src(), "modbus_connect: err {}",
+            .{modbus_err});
+    try err_if(modbus_err != 0, TtyError.ModbusConnectFailed);
+    modbus_err = c.modbus_set_debug(info.ctx, @intFromBool(info.modbus_debug));
+    try err_if(modbus_err != 0, TtyError.ModbusSetDebugFailed);
+    const tty_main_loop_rv = tty_main_loop(info);
+    if (tty_main_loop_rv) |_| { } else |err|
+    {
+        try log.logln(log.LogLevel.info, @src(),
+                "tty_main_loop error {}", .{err});
+    }
 }
 
 //*****************************************************************************
@@ -697,12 +703,12 @@ pub fn main() !void
     try posix.listen(tty_info.sck, 2);
     defer posix.close(tty_info.sck);
     // setup modbus
-    const cptr = std.mem.sliceTo(&tty_info.tty, 0);
-    if (c.modbus_new_rtu(cptr.ptr, 9600, 'N', 8, 1)) |actx|
+    if (c.modbus_new_rtu(&tty_info.tty, 9600, 'N', 8, 1)) |actx|
     {
         defer c.modbus_free(actx);
         try log.logln(log.LogLevel.info, @src(),
-                "modbus_new_rtu ok for {s}", .{tty_info.tty});
+                "modbus_new_rtu ok for {s}",
+                .{std.mem.sliceTo(&tty_info.tty, 0)});
         tty_info.ctx = actx;
         try process_tty_info(&tty_info);
     }

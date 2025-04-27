@@ -580,8 +580,8 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
 //*****************************************************************************
 pub fn main() !void
 {
-    var result = process_args();
-    if (result) |_| { } else |err|
+    const process_args_rv = process_args();
+    if (process_args_rv) |_| { } else |err|
     {
         if (err == error.ShowCommandLine)
         {
@@ -629,12 +629,17 @@ pub fn main() !void
     const tpe: u32 = posix.SOCK.STREAM;
     info.csck = try posix.socket(address.any.family, tpe, 0);
     const address_len = address.getOsSockLen();
-    result = try posix.connect(info.csck, &address.any, address_len);
+    try posix.connect(info.csck, &address.any, address_len);
 
     const ins = try parse.create(&g_allocator, 64 * 1024);
     defer ins.delete();
 
-    try main_loop(info, ins);
+    const main_loop_rv = main_loop(info, ins);
+    if (main_loop_rv) |_| { } else |err|
+    {
+        try log.logln(log.LogLevel.info, @src(),
+                "main_loop error {}", .{err});
+    }
 
     clear_out_queue(info);
 }
