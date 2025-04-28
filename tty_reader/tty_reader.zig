@@ -573,12 +573,7 @@ fn process_tty_info(info: *tty_info_t) !void
     try err_if(modbus_err != 0, TtyError.ModbusConnectFailed);
     modbus_err = c.modbus_set_debug(info.ctx, @intFromBool(info.modbus_debug));
     try err_if(modbus_err != 0, TtyError.ModbusSetDebugFailed);
-    const tty_main_loop_rv = tty_main_loop(info);
-    if (tty_main_loop_rv) |_| { } else |err|
-    {
-        try log.logln(log.LogLevel.info, @src(),
-                "tty_main_loop error {}", .{err});
-    }
+    try tty_main_loop(info);
 }
 
 //*****************************************************************************
@@ -703,14 +698,20 @@ pub fn main() !void
     try posix.listen(tty_info.sck, 2);
     defer posix.close(tty_info.sck);
     // setup modbus
-    if (c.modbus_new_rtu(&tty_info.tty, 9600, 'N', 8, 1)) |actx|
+    while (c.modbus_new_rtu(&tty_info.tty, 9600, 'N', 8, 1)) |actx|
     {
         defer c.modbus_free(actx);
         try log.logln(log.LogLevel.info, @src(),
                 "modbus_new_rtu ok for {s}",
                 .{std.mem.sliceTo(&tty_info.tty, 0)});
         tty_info.ctx = actx;
-        try process_tty_info(&tty_info);
+        const process_tty_info_rv = process_tty_info(&tty_info);
+        if (process_tty_info_rv) |_| { } else |err|
+        {
+            try log.logln(log.LogLevel.info, @src(),
+                    "process_tty_info error {}", .{err});
+            try sleep(60000);
+        }
     }
     else
     {
