@@ -257,7 +257,13 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
         try log.logln_devel(log.LogLevel.info, @src(),
                 "modbus_read_registers read address {} err {}",
                 .{id_info.read_address, err});
-        try err_if(err != count, TtyError.ModbusReadRegistersFailed);
+        if (err != count)
+        {
+            try log.logln(log.LogLevel.info, @src(),
+                    "modbus_read_registers err != count {} != {}",
+                    .{err, count});
+            return TtyError.ModbusReadRegistersFailed;
+        }
         if (info.modbus_debug)
         {
             try hexdump_slice(regs);
@@ -302,7 +308,13 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
         try log.logln_devel(log.LogLevel.info, @src(),
                 "modbus_read_input_registers read address {} err {}",
                 .{id_info.read_input_address, err});
-        try err_if(err != count, TtyError.ModbusReadInputRegistersFailed);
+        if (err != count)
+        {
+            try log.logln(log.LogLevel.info, @src(),
+                    "modbus_read_input_registers err != count {} != {}",
+                    .{err, count});
+            return TtyError.ModbusReadRegistersFailed;
+        }
         if (info.modbus_debug)
         {
             try hexdump_slice(regs);
@@ -706,17 +718,16 @@ pub fn main() !void
                 .{std.mem.sliceTo(&tty_info.tty, 0)});
         tty_info.ctx = actx;
         const process_tty_info_rv = process_tty_info(&tty_info);
-        if (process_tty_info_rv) |_| { } else |err|
+        if (process_tty_info_rv) |_|
+        {
+            break;
+        }
+        else |err|
         {
             try log.logln(log.LogLevel.info, @src(),
                     "process_tty_info error {}", .{err});
             try sleep(60000);
         }
-    }
-    else
-    {
-        try log.logln(log.LogLevel.info, @src(),
-                "modbus_new_rtu failed for {s}", .{tty_info.tty});
     }
     try log.logln(log.LogLevel.info, @src(), "exit main", .{});
 }
