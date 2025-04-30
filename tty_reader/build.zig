@@ -1,7 +1,8 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void
+pub fn build(b: *std.Build) !void
 {
+    try update_git_zig(b.allocator);
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     // tty_reader
@@ -86,7 +87,8 @@ pub fn build(b: *std.Build) void
     b.installArtifact(tty_reader_heyu);
 }
 
-fn setExtraLibraryPaths(compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void
+fn setExtraLibraryPaths(compile: *std.Build.Step.Compile,
+        target: std.Build.ResolvedTarget) void
 {
     if (target.result.cpu.arch == std.Target.Cpu.Arch.x86)
     {
@@ -94,6 +96,23 @@ fn setExtraLibraryPaths(compile: *std.Build.Step.Compile, target: std.Build.Reso
         // of /usr/lib/i386-linux-gnu
         compile.addLibraryPath(.{.cwd_relative = "/usr/lib/i386-linux-gnu/"});
     }
+}
+
+fn update_git_zig(allocator: std.mem.Allocator) !void
+{
+    const cmdline = [_][]const u8{"git", "describe", "--always"};
+    const rv = try std.process.Child.run(
+            .{.allocator = allocator, .argv = &cmdline});
+    defer allocator.free(rv.stdout);
+    defer allocator.free(rv.stderr);
+    const file = try std.fs.cwd().createFile("git.zig", .{});
+    const writer = file.writer();
+    var sha1 = rv.stdout;
+    while ((sha1.len > 0) and (sha1[sha1.len - 1] < 0x20))
+    {
+        sha1.len -= 1;
+    }
+    try writer.print("pub const g_git_sha1 = \"{s}\";\n", .{sha1});
 }
 
 const libtomlc_files = &.{

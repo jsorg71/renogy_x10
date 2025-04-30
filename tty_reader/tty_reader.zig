@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const log = @import("log");
 const hexdump = @import("hexdump");
 const parse = @import("parse");
+const git = @import("git.zig");
 const toml  = @import("tty_toml.zig");
 const net = std.net;
 const posix = std.posix;
@@ -597,6 +598,7 @@ fn show_command_line_args() !void
     const vstr = builtin.zig_version_string;
     try writer.print("{s} - A tty publisher\n", .{app_name});
     try writer.print("built with zig version {s}\n", .{vstr});
+    try writer.print("git sha1 {s}\n", .{git.g_git_sha1});
     try writer.print("Usage: {s} [options]\n", .{app_name});
     try writer.print("  -h: print this help\n", .{});
     try writer.print("  -F: run in foreground\n", .{});
@@ -705,10 +707,10 @@ pub fn main() !void
     const tpe: u32 = posix.SOCK.STREAM;
     var address = try net.Address.initUnix(listen_socket);
     tty_info.sck = try posix.socket(address.any.family, tpe, 0);
+    defer posix.close(tty_info.sck);
     const address_len = address.getOsSockLen();
     try posix.bind(tty_info.sck, &address.any, address_len);
     try posix.listen(tty_info.sck, 2);
-    defer posix.close(tty_info.sck);
     // setup modbus
     while (c.modbus_new_rtu(&tty_info.tty, 9600, 'N', 8, 1)) |actx|
     {
