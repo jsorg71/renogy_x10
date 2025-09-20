@@ -1,0 +1,55 @@
+SHT20 Temperature Humidity Sensor
+4-30V
+
+Work voltage:DC4-30V (highest do not exceed 33 v) .
+Most powerful:0.2W 
+Work environment:Temperature 20 °-60 °,Humidity 0-100. 
+Control precision:Temperature±0.3°,Humidity ±3%RH.
+
+
+Output interface: RS485 communication (standard MODBUS protocol and custom ordinary), see note agreement device.
+Device address: 1-247 can be set, the default is 1.
+Baud rate: 9600(the user can set), 8bits, one stop, no check;
+
+Yellow A
+White  B
+Red    +
+Black  -
+
+Product parameters:
+Operating voltage: DC4-30V (maximum do not exceed 33V)
+Maximum power: 0.2W
+Operating temperature: Temperature -20℃+60℃, humidity 0%RH-100%RH
+Control accuracy: Temperature ± 0.3℃ (25℃), humidity ± 3%RH (25℃)
+Output interface: RS485 communication (standard MODBUS protocol and custom common protocol),. See the protocol description
+Device address: can be set 1-247, the default is 1
+Baud rate: default 9600 (user can set), 8-bit data, 1-bit stop, no parity
+Shipping list:
+Sensor X1
+
+maybe, this is from another similar device
+Modbus Function Code:
+0x03: Read keep register
+0x04: Read input register
+0x06: Write a single keep register
+
+Comimark LY499
+
+0x10: Write more keep registers
+-----------------------------------------------------------------------------------
+Register Type       Register Address        Register contents       Number of bytes
+-----------------------------------------------------------------------------------
+Input Register      0x0001                  Temperature             2
+                    0x0002                  Humidity                2
+Keep Register       0x0101                  Device Address          2
+                    0x0102                  Baud Rate               2
+                                            0:9600
+                                            1:14400
+                                            2:19200
+                    0x0103                  Temperature             2
+                                            correction(/10)
+                                            -10.0~10.0
+                    0x0104                  Humidity                2
+                                            correction(/10)
+                                            -10.0~10.0
+
