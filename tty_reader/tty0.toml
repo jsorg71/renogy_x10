@@ -24,6 +24,12 @@ read_count=0
 read_input_address=0
 read_input_count=8
 
+[id10]
+read_address=0
+read_count=0
+read_input_address=0
+read_input_count=8
+
 #[id4]
 #read_address=0
 #read_count=4

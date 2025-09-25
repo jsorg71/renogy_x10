@@ -107,6 +107,23 @@ pub fn main() !void
                                 .{id, voltage, current, watts, watthours, hiallarm, loallarm});
                     }
                 }
+                else if ((type1 == 1) and (id == 10))
+                {
+                    if (address1 == 0 and count == 8)
+                    {
+                        var voltage: f32 = @floatFromInt(s.in_u16_le());
+                        voltage /= 100;
+                        var current: f32 = @floatFromInt(s.in_u16_le());
+                        current /= 100;
+                        var watts: f32 = @floatFromInt(s.in_u32_le());
+                        watts /= 10;
+                        const watthours = s.in_u32_le();
+                        const hiallarm = s.in_u16_le();
+                        const loallarm = s.in_u16_le();
+                        std.debug.print("id {} voltage {d:.2} current {d:.2} watts {d:.1} watthours {} hiallarm 0x{x} loallarm 0x{x}\n",
+                                .{id, voltage, current, watts, watthours, hiallarm, loallarm});
+                    }
+                }
             }
         }
     }
