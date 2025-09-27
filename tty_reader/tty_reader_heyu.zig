@@ -170,7 +170,7 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
     const id = s.in_u16_le();
     const address1 = s.in_u16_le();
     const count = s.in_u16_le();
-    if ((type1 == 0) and (id == 1))
+    if ((type1 == 0) and (id == 9))
     {
         if (address1 == 256 and count == 10)
         {

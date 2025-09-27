@@ -38,39 +38,16 @@ pub fn main() !void
                 const id = s.in_u16_le();
                 const address1 = s.in_u16_le();
                 const count = s.in_u16_le();
-                if ((type1 == 0) and (id == 1))
+                if ((type1 == 1) and (id == 1))
                 {
-                    if (address1 == 256 and count == 10)
+                    if (address1 == 1 and count == 2)
                     {
-                        const percent = s.in_u16_le();
-                        var voltage: f32 = @floatFromInt(s.in_u16_le());
-                        voltage /= 10;
-                        var amps: f32 = @floatFromInt(s.in_u16_le());
-                        amps /= 100;
-                        const val1 = s.in_u16_le(); // temp
-                        const val2 = s.in_u16_le(); // load volts
-                        const val3 = s.in_u16_le(); // load amps
-                        const val4 = s.in_u16_le(); // load watts
-                        var pvvoltage: f32 = @floatFromInt(s.in_u16_le());
-                        pvvoltage /= 10;
-                        var pvamps: f32 = @floatFromInt(s.in_u16_le());
-                        pvamps /= 100;
-                        const pvwatts = s.in_u16_le(); // pv watts
-                        std.debug.print("id {} " ++
-                                "percent {} " ++
-                                "voltage {d:.1} " ++
-                                "amps {d:.2} " ++
-                                "temp {} " ++
-                                "load volts {} " ++
-                                "load amps {} " ++
-                                "load watts {} " ++
-                                "pv volts {d:.1} " ++
-                                "pv amps {d:.2} " ++
-                                "pv watts {} percent {d:.1}\n",
-                                .{id, percent, voltage, amps,
-                                val1, val2, val3, val4,
-                                pvvoltage, pvamps, pvwatts,
-                                (voltage * amps) / (pvvoltage * pvamps + 1)});
+                        var temp: f32 = @floatFromInt(s.in_u16_le());
+                        temp /= 10;
+                        var hum: f32 = @floatFromInt(s.in_u16_le());
+                        hum /= 10;
+                        std.debug.print("id {} temp {d:.2}C({d:.2}F) hum {d:.2}\n",
+                                .{id, temp, temp * 1.8 + 32.0, hum});
                     }
                 }
                 else if ((type1 == 1) and (id == 3))
@@ -105,6 +82,41 @@ pub fn main() !void
                         const loallarm = s.in_u16_le();
                         std.debug.print("id {} voltage {d:.2} current {d:.2} watts {d:.1} watthours {} hiallarm 0x{x} loallarm 0x{x}\n",
                                 .{id, voltage, current, watts, watthours, hiallarm, loallarm});
+                    }
+                }
+                else if ((type1 == 0) and (id == 9))
+                {
+                    if (address1 == 256 and count == 10)
+                    {
+                        const percent = s.in_u16_le();
+                        var voltage: f32 = @floatFromInt(s.in_u16_le());
+                        voltage /= 10;
+                        var amps: f32 = @floatFromInt(s.in_u16_le());
+                        amps /= 100;
+                        const val1 = s.in_u16_le(); // temp
+                        const val2 = s.in_u16_le(); // load volts
+                        const val3 = s.in_u16_le(); // load amps
+                        const val4 = s.in_u16_le(); // load watts
+                        var pvvoltage: f32 = @floatFromInt(s.in_u16_le());
+                        pvvoltage /= 10;
+                        var pvamps: f32 = @floatFromInt(s.in_u16_le());
+                        pvamps /= 100;
+                        const pvwatts = s.in_u16_le(); // pv watts
+                        std.debug.print("id {} " ++
+                                "percent {} " ++
+                                "voltage {d:.1} " ++
+                                "amps {d:.2} " ++
+                                "temp {} " ++
+                                "load volts {} " ++
+                                "load amps {} " ++
+                                "load watts {} " ++
+                                "pv volts {d:.1} " ++
+                                "pv amps {d:.2} " ++
+                                "pv watts {} percent {d:.1}\n",
+                                .{id, percent, voltage, amps,
+                                val1, val2, val3, val4,
+                                pvvoltage, pvamps, pvwatts,
+                                (voltage * amps) / (pvvoltage * pvamps + 1)});
                     }
                 }
                 else if ((type1 == 1) and (id == 10))

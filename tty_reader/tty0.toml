@@ -6,12 +6,6 @@ item_mstime=1000
 list_mstime=60000
 listen_socket="/tmp/tty_reader.socket"
 
-[id1]
-read_address=256
-read_count=10
-read_input_address=0
-read_input_count=0
-
 [id3]
 read_address=0
 read_count=0
@@ -23,6 +17,12 @@ read_address=0
 read_count=0
 read_input_address=0
 read_input_count=8
+
+[id9]
+read_address=256
+read_count=10
+read_input_address=0
+read_input_count=0
 
 [id10]
 read_address=0
