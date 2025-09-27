@@ -30,6 +30,12 @@ read_count=0
 read_input_address=0
 read_input_count=8
 
+[id11]
+read_address=0
+read_count=0
+read_input_address=1
+read_input_count=2
+
 #[id4]
 #read_address=0
 #read_count=4

@@ -38,19 +38,7 @@ pub fn main() !void
                 const id = s.in_u16_le();
                 const address1 = s.in_u16_le();
                 const count = s.in_u16_le();
-                if ((type1 == 1) and (id == 1))
-                {
-                    if (address1 == 1 and count == 2)
-                    {
-                        var temp: f32 = @floatFromInt(s.in_u16_le());
-                        temp /= 10;
-                        var hum: f32 = @floatFromInt(s.in_u16_le());
-                        hum /= 10;
-                        std.debug.print("id {} temp {d:.2}C({d:.2}F) hum {d:.2}\n",
-                                .{id, temp, temp * 1.8 + 32.0, hum});
-                    }
-                }
-                else if ((type1 == 1) and (id == 3))
+                if ((type1 == 1) and (id == 3))
                 {
                     if (address1 == 0 and count == 8)
                     {
@@ -134,6 +122,18 @@ pub fn main() !void
                         const loallarm = s.in_u16_le();
                         std.debug.print("id {} voltage {d:.2} current {d:.2} watts {d:.1} watthours {} hiallarm 0x{x} loallarm 0x{x}\n",
                                 .{id, voltage, current, watts, watthours, hiallarm, loallarm});
+                    }
+                }
+                else if ((type1 == 1) and (id == 11))
+                {
+                    if (address1 == 1 and count == 2)
+                    {
+                        var temp: f32 = @floatFromInt(s.in_u16_le());
+                        temp /= 10;
+                        var hum: f32 = @floatFromInt(s.in_u16_le());
+                        hum /= 10;
+                        std.debug.print("id {} temp {d:.2}C({d:.2}F) hum {d:.2}\n",
+                                .{id, temp, temp * 1.8 + 32.0, hum});
                     }
                 }
             }
