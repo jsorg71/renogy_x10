@@ -303,6 +303,53 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             try process_msg_table(info, table_name, value);
         }
     }
+    else if ((type1 == 1) and (id == 10))
+    {
+        if ((address1 == 0) and (count == 8))
+        {
+            // volts
+            try s.check_rem(2);
+            const pzem10volts = s.in_u16_le();
+            value = @floatFromInt(pzem10volts);
+            value /= 100;
+            table_name = "pzem10_volts";
+            try process_msg_table(info, table_name, value);
+            // amps
+            try s.check_rem(2);
+            const pzem10amps = s.in_u16_le();
+            value = @floatFromInt(pzem10amps);
+            value /= 100;
+            table_name = "pzem10_amps";
+            try process_msg_table(info, table_name, value);
+            // watts
+            try s.check_rem(2);
+            const pzem10watts = s.in_u16_le();
+            value = @floatFromInt(pzem10watts);
+            value /= 10;
+            table_name = "pzem10_watts";
+            try process_msg_table(info, table_name, value);
+        }
+    }
+    else if ((type1 == 1) and (id == 11))
+    {
+        if ((address1 == 1) and (count == 2))
+        {
+            // temp
+            try s.check_rem(2);
+            const temp11temp = s.in_u16_le();
+            value = @floatFromInt(temp11temp);
+            value /= 10;
+            table_name = "temp11_temp";
+            try process_msg_table(info, table_name, value);
+            // hum
+            try s.check_rem(2);
+            const temp11hum = s.in_u16_le();
+            value = @floatFromInt(temp11hum);
+            value /= 10;
+            table_name = "temp11_hum";
+            try process_msg_table(info, table_name, value);
+        }
+    }
 }
 
 //*****************************************************************************
