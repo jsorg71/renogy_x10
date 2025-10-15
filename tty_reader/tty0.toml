@@ -6,30 +6,35 @@ item_mstime=1000
 list_mstime=60000
 listen_socket="/tmp/tty_reader.socket"
 
+# pzem on charger 1
 [id3]
 read_address=0
 read_count=0
 read_input_address=0
 read_input_count=8
 
+# pzem on charger 2
 [id6]
 read_address=0
 read_count=0
 read_input_address=0
 read_input_count=8
 
+# renogy
 [id9]
 read_address=256
 read_count=10
 read_input_address=0
 read_input_count=0
 
+# pzem on 12v closet
 [id10]
 read_address=0
 read_count=0
 read_input_address=0
 read_input_count=8
 
+# temp sensor
 [id11]
 read_address=0
 read_count=0
