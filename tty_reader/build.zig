@@ -4,11 +4,17 @@ const builtin = @import("builtin");
 //*****************************************************************************
 pub fn build(b: *std.Build) !void
 {
+    // build options
+    const do_strip = b.option(
+        bool,
+        "strip",
+        "Strip the executabes"
+    ) orelse false;
     try update_git_zig(b.allocator);
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     // tty_reader
-    const tty_reader = myAddExecutable(b, "tty_reader", target,optimize, true);
+    const tty_reader = myAddExecutable(b, "tty_reader", target,optimize, do_strip);
     tty_reader.root_module.root_source_file = b.path("tty_reader.zig");
     tty_reader.linkLibC();
     tty_reader.addIncludePath(b.path("."));
@@ -26,7 +32,7 @@ pub fn build(b: *std.Build) !void
     setExtraLibraryPaths(tty_reader, target);
     b.installArtifact(tty_reader);
     // tty_reader_client
-    const tty_reader_client = myAddExecutable(b, "tty_reader_client", target,optimize, true);
+    const tty_reader_client = myAddExecutable(b, "tty_reader_client", target,optimize, do_strip);
     tty_reader_client.root_module.root_source_file = b.path("tty_reader_client.zig");
     tty_reader_client.linkLibC();
     tty_reader_client.root_module.addImport("hexdump", b.createModule(.{
@@ -38,7 +44,7 @@ pub fn build(b: *std.Build) !void
     setExtraLibraryPaths(tty_reader_client, target);
     b.installArtifact(tty_reader_client);
     // tty_reader_influx
-    const tty_reader_influx = myAddExecutable(b, "tty_reader_influx", target,optimize, true);
+    const tty_reader_influx = myAddExecutable(b, "tty_reader_influx", target,optimize, do_strip);
     tty_reader_influx.root_module.root_source_file = b.path("tty_reader_influx.zig");
     tty_reader_influx.linkLibC();
     tty_reader_influx.root_module.addImport("hexdump", b.createModule(.{
@@ -53,7 +59,7 @@ pub fn build(b: *std.Build) !void
     setExtraLibraryPaths(tty_reader_influx, target);
     b.installArtifact(tty_reader_influx);
     // tty_reader_heyu
-    const tty_reader_heyu = myAddExecutable(b, "tty_reader_heyu", target,optimize, true);
+    const tty_reader_heyu = myAddExecutable(b, "tty_reader_heyu", target,optimize, do_strip);
     tty_reader_heyu.root_module.root_source_file = b.path("tty_reader_heyu.zig");
     tty_reader_heyu.linkLibC();
     tty_reader_heyu.root_module.addImport("hexdump", b.createModule(.{
