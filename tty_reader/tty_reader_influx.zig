@@ -18,7 +18,12 @@ const g_influx_hostname = "server3.xrdp.org";
 const g_influx_port: c_int = 8086;
 var g_deamonize: bool = false;
 
-const DL = std.DoublyLinkedList(*parse.parse_t);
+const send_t = struct
+{
+    sent: usize = 0,
+    out_data_slice: []u8,
+    next: ?*send_t = null,
+};
 
 const info_t = struct
 {
@@ -34,20 +39,22 @@ const info_t = struct
     to_read: usize = 4,
     readed: usize = 0,
 
-    out_queue: DL = undefined,
+    send_head: ?*send_t = null,
+    send_tail: ?*send_t = null,
+
 
     connecting: bool = false,
 };
 
 //*****************************************************************************
-fn term_sig(_: c_int) callconv(.C) void
+export fn term_sig(_: c_int) void
 {
     const msg: [4]u8 = .{'i', 'n', 't', 0};
     _ = posix.write(g_term[1], msg[0..4]) catch return;
 }
 
 //*****************************************************************************
-fn pipe_sig(_: c_int) callconv(.C) void
+export fn pipe_sig(_: c_int) void
 {
 }
 
@@ -56,7 +63,9 @@ fn setup_signals() !void
 {
     g_term = try posix.pipe();
     var sa: posix.Sigaction = undefined;
-    sa.mask = posix.empty_sigset;
+    sa.mask =
+    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor < 15))
+            posix.empty_sigset else posix.sigemptyset();
     sa.flags = 0;
     sa.handler = .{.handler = term_sig};
     if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor == 13))
@@ -85,9 +94,28 @@ fn cleanup_signals() void
 //*****************************************************************************
 fn show_command_line_args() !void
 {
+    if ((builtin.zig_version.major == 0) and
+        (builtin.zig_version.minor < 15))
+    {
+        const stdout = std.io.getStdOut();
+        const writer = stdout.writer();
+        try show_command_line_args1(writer);
+    }
+    else
+    {
+        var buf: [1024]u8 = undefined;
+        const stdout = std.fs.File.stdout();
+        var stdout_writer = stdout.writer(&buf);
+        const writer = &stdout_writer.interface;
+        try show_command_line_args1(writer);
+        try writer.flush();
+    }
+}
+
+//*****************************************************************************
+fn show_command_line_args1(writer: anytype) !void
+{
     const app_name = std.mem.sliceTo(std.os.argv[0], 0);
-    const stdout = std.io.getStdOut();
-    const writer = stdout.writer();
     const vstr = builtin.zig_version_string;
     try writer.print("{s} - A tty subsriber\n", .{app_name});
     try writer.print("built with zig version {s}\n", .{vstr});
@@ -185,16 +213,20 @@ fn process_msg_table(info: *info_t, table_name: []const u8,
             "Content-Length: {}\r\n\r\n{s}",
             .{g_influx_database, g_influx_hostname, g_influx_port,
             g_influx_token, str1.len, str1});
-
-    const s = try parse.create(&g_allocator, str2.len);
-    errdefer s.delete();
-    try s.check_rem(str2.len);
-    s.out_u8_slice(str2);
-    try s.reset(0);
-    const node = try g_allocator.create(DL.Node);
-    errdefer g_allocator.destroy(node);
-    node.* = .{.data = s};
-    info.out_queue.append(node);
+    const send = try g_allocator.create(send_t);
+    const out_data_slice = try g_allocator.alloc(u8, str2.len);
+    send.* = .{.out_data_slice = out_data_slice};
+    std.mem.copyForwards(u8, send.out_data_slice, str2);
+    if (info.send_tail) |asend_tail|
+    {
+        asend_tail.next = send;
+        info.send_tail = send;
+    }
+    else
+    {
+        info.send_head = send;
+        info.send_tail = send;
+    }
 }
 
 //*****************************************************************************
@@ -380,7 +412,7 @@ fn process_csck_in(info: *info_t, ins: *parse.parse_t) !void
         {
             if (info.code == 0)
             {
-                const s = try parse.create_from_slice(&g_allocator,
+                const s = try parse.parse_t.create_from_slice(&g_allocator,
                         ins.data[4..info.readed]);
                 defer s.delete();
                 try process_msg(info, s);
@@ -420,37 +452,29 @@ fn process_isck_in(info: *info_t) !void
 //*****************************************************************************
 fn process_isck_out(info: *info_t) !void
 {
-    if (info.out_queue.first) |anode|
+    if (info.send_head) |asend_head|
     {
-        const outs = anode.data;
-        const out_slice = outs.data[outs.offset..];
-        const sent = posix.send(info.isck, out_slice, 0);
-        if (sent) |asent|
+        const send = asend_head;
+        const slice = send.out_data_slice[send.sent..];
+        const sent = try posix.send(info.isck, slice, 0);
+        if (sent > 0)
         {
-            try log.logln_devel(log.LogLevel.info, @src(),
-                    "posix.send rv {}", .{asent});
-            if (asent > 0)
+            send.sent += sent;
+            if (send.sent >= send.out_data_slice.len)
             {
-                outs.offset += asent;
-                if (outs.offset >= outs.data.len)
+                info.send_head = send.next;
+                if (info.send_head == null)
                 {
-                    info.out_queue.remove(anode);
-                    anode.data.delete();
-                    g_allocator.destroy(anode);
+                    // if send_head is null, set send_tail to null
+                    info.send_tail = null;
                 }
-            }
-            else
-            {
-                return error.InvalidParam;
+                g_allocator.free(send.out_data_slice);
+                g_allocator.destroy(send);
             }
         }
-        else |err|
+        else
         {
-            // WouldBlock is ok
-            if (err != error.WouldBlock)
-            {
-                return err;
-            }
+            return error.InvalidParam;
         }
     }
 }
@@ -458,10 +482,13 @@ fn process_isck_out(info: *info_t) !void
 //*****************************************************************************
 fn clear_out_queue(info: *info_t) void
 {
-    while (info.out_queue.popFirst()) |anode|
+
+    var send = info.send_head;
+    while (send) |asend|
     {
-        anode.data.delete();
-        g_allocator.destroy(anode);
+        send = asend.next;
+        g_allocator.free(asend.out_data_slice);
+        g_allocator.destroy(asend);
     }
 }
 
@@ -552,8 +579,7 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
     while (true)
     {
         try log.logln_devel(log.LogLevel.info, @src(),
-                "loop out_queue len {}",
-                .{info.out_queue.len});
+                "loop", .{});
 
         timeout = -1;
 
@@ -581,7 +607,7 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
             polls[poll_count].fd = info.isck;
             polls[poll_count].events = posix.POLL.IN;
             polls[poll_count].revents = 0;
-            if ((info.out_queue.len > 0) or info.connecting)
+            if ((info.send_head != null) or info.connecting)
             {
                 // we have data to write
                 polls[poll_count].events |= posix.POLL.OUT;
@@ -672,7 +698,6 @@ pub fn main() !void
     const info = try g_allocator.create(info_t);
     defer g_allocator.destroy(info);
     info.* = .{};
-    info.out_queue = .{};
 
     const address = try net.Address.initUnix("/tmp/tty_reader.socket");
     const tpe: u32 = posix.SOCK.STREAM;
@@ -681,7 +706,7 @@ pub fn main() !void
     const address_len = address.getOsSockLen();
     try posix.connect(info.csck, &address.any, address_len);
 
-    const ins = try parse.create(&g_allocator, 64 * 1024);
+    const ins = try parse.parse_t.create(&g_allocator, 64 * 1024);
     defer ins.delete();
 
     const main_loop_rv = main_loop(info, ins);

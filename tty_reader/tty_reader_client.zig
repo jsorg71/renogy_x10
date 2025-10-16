@@ -27,7 +27,7 @@ pub fn main() !void
         }
         //std.debug.print("recv {}\n", .{recv_rv});
         //try hexdump.printHexDump(0, recv_slice[0..recv_rv]);
-        const s = try parse.create_from_slice(&g_allocator, recv_slice[0..recv_rv]);
+        const s = try parse.parse_t.create_from_slice(&g_allocator, recv_slice[0..recv_rv]);
         defer s.delete();
         try s.check_rem(recv_rv);
         if (s.in_u16_le() == 0)

@@ -34,7 +34,12 @@ pub const TtyError = error
     ShowCommandLine,
 };
 
-const DL = std.DoublyLinkedList(*parse.parse_t);
+const send_t = struct
+{
+    sent: usize = 0,
+    out_data_slice: []u8,
+    next: ?*send_t = null,
+};
 
 //*****************************************************************************
 inline fn err_if(b: bool, err: TtyError) !void
@@ -46,24 +51,26 @@ const tty_peer_info_t = struct // one for each client connected
 {
     delme: bool = false,
     sck: i32 = -1,
-    out_queue: DL = undefined,
+    send_head: ?*send_t = null,
+    send_tail: ?*send_t = null,
     ins: *parse.parse_t = undefined,
 
     //*************************************************************************
     fn init(self: *tty_peer_info_t) !void
     {
         self.* = .{};
-        self.out_queue = .{};
-        self.ins = try parse.create(&g_allocator, 64 * 1024);
+        self.ins = try parse.parse_t.create(&g_allocator, 64 * 1024);
     }
 
     //*************************************************************************
     fn deinit(self: *tty_peer_info_t) void
     {
-        while (self.out_queue.popFirst()) |anode|
+        var send = self.send_head;
+        while (send) |asend|
         {
-            anode.data.delete();
-            g_allocator.destroy(anode);
+            send = asend.next;
+            g_allocator.free(asend.out_data_slice);
+            g_allocator.destroy(asend);
         }
         posix.close(self.sck);
         self.ins.delete();
@@ -88,8 +95,8 @@ pub const tty_info_t = struct // just one of these
     list_mstime: i64 = 0,
     tty: [g_tty_name_max_length:0]u8 = .{0} ** g_tty_name_max_length,
     listen_socket: [g_tty_name_max_length:0]u8 = .{0} ** g_tty_name_max_length,
-    id_list: std.ArrayList(tty_id_info_t) = undefined,
-    peer_list: std.ArrayList(tty_peer_info_t) = undefined,
+    id_list: std.ArrayListUnmanaged(tty_id_info_t) = undefined,
+    peer_list: std.ArrayListUnmanaged(tty_peer_info_t) = undefined,
     ctx: *c.modbus_t = undefined,
     id_list_index: usize = 0,
     id_list_sub_index: usize = 0,
@@ -104,19 +111,21 @@ pub const tty_info_t = struct // just one of these
     fn init(self: *tty_info_t) !void
     {
         self.* = .{};
-        self.id_list = std.ArrayList(tty_id_info_t).init(g_allocator);
-        self.peer_list = std.ArrayList(tty_peer_info_t).init(g_allocator);
+        self.id_list = try std.ArrayListUnmanaged(tty_id_info_t).
+                initCapacity(g_allocator, 32);
+        self.peer_list = try std.ArrayListUnmanaged(tty_peer_info_t).
+                initCapacity(g_allocator, 32);
     }
 
     //*************************************************************************
     fn deinit(self: *tty_info_t) void
     {
-        self.id_list.deinit();
+        self.id_list.deinit(g_allocator);
         for (self.peer_list.items) |*aitem|
         {
             aitem.deinit();
         }
-        self.peer_list.deinit();
+        self.peer_list.deinit(g_allocator);
     }
 
     //*************************************************************************
@@ -166,14 +175,14 @@ fn sleep(mstime: i32) !void
 }
 
 //*****************************************************************************
-fn term_sig(_: c_int) callconv(.C) void
+export fn term_sig(_: c_int) void
 {
     const msg: [4]u8 = .{'i', 'n', 't', 0};
     _ = posix.write(g_term[1], msg[0..4]) catch return;
 }
 
 //*****************************************************************************
-fn pipe_sig(_: c_int) callconv(.C) void
+export fn pipe_sig(_: c_int) void
 {
 }
 
@@ -182,7 +191,9 @@ fn setup_signals() !void
 {
     g_term = try posix.pipe();
     var sa: posix.Sigaction = undefined;
-    sa.mask = posix.empty_sigset;
+    sa.mask =
+    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor < 15))
+            posix.empty_sigset else posix.sigemptyset();
     sa.flags = 0;
     sa.handler = .{.handler = term_sig};
     if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor == 13))
@@ -275,8 +286,8 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
         for (info.peer_list.items) |*aitem|
         {
             const msg_size = 2 + 2 + 2 + 2 + 2 + 2 + count * 2;
-            var s = try parse.create(&g_allocator, msg_size);
-            errdefer s.delete();
+            var s = try parse.parse_t.create(&g_allocator, msg_size);
+            defer s.delete();
             try s.check_rem(msg_size);
             s.out_u16_le(0); // msg id
             s.out_u16_le(msg_size); // size
@@ -288,14 +299,21 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
             {
                 s.out_u16_le(areg);
             }
-            try s.reset(0);
-            const node = try g_allocator.create(DL.Node);
-            errdefer g_allocator.destroy(node);
-            try log.logln_devel(log.LogLevel.info, @src(),
-                    "peer sck {} queue len {}",
-                    .{aitem.sck, aitem.out_queue.len});
-            node.* = .{.data = s};
-            aitem.out_queue.append(node);
+            const s_slice = s.get_out_slice();
+            const send = try g_allocator.create(send_t);
+            const out_data_slice = try g_allocator.alloc(u8, s_slice.len);
+            send.* = .{.out_data_slice = out_data_slice};
+            std.mem.copyForwards(u8, send.out_data_slice, s_slice);
+            if (aitem.send_tail) |asend_tail|
+            {
+                asend_tail.next = send;
+                aitem.send_tail = send;
+            }
+            else
+            {
+                aitem.send_head = send;
+                aitem.send_tail = send;
+            }
         }
     }
     else if (info.id_list_sub_index == 2)
@@ -326,8 +344,8 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
         for (info.peer_list.items) |*aitem|
         {
             const msg_size = 2 + 2 + 2 + 2 + 2 + 2 + count * 2;
-            var s = try parse.create(&g_allocator, msg_size);
-            errdefer s.delete();
+            var s = try parse.parse_t.create(&g_allocator, msg_size);
+            defer s.delete();
             try s.check_rem(msg_size);
             s.out_u16_le(0); // msg id
             s.out_u16_le(msg_size); // size
@@ -339,14 +357,21 @@ fn process_tty_id_info(info: *tty_info_t, id_info: *tty_id_info_t) !void
             {
                 s.out_u16_le(areg);
             }
-            try s.reset(0);
-            const node = try g_allocator.create(DL.Node);
-            errdefer g_allocator.destroy(node);
-            try log.logln_devel(log.LogLevel.info, @src(),
-                    "peer sck {} queue len {}",
-                    .{aitem.sck, aitem.out_queue.len});
-            node.* = .{.data = s};
-            aitem.out_queue.append(node);
+            const s_slice = s.get_out_slice();
+            const send = try g_allocator.create(send_t);
+            const out_data_slice = try g_allocator.alloc(u8, s_slice.len);
+            send.* = .{.out_data_slice = out_data_slice};
+            std.mem.copyForwards(u8, send.out_data_slice, s_slice);
+            if (aitem.send_tail) |asend_tail|
+            {
+                asend_tail.next = send;
+                aitem.send_tail = send;
+            }
+            else
+            {
+                aitem.send_head = send;
+                aitem.send_tail = send;
+            }
         }
     }
 }
@@ -437,24 +462,29 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
                     "POLL.OUT set for sck {}", .{fd});
             const peer = try get_peer_by_sck(info, fd);
             try log.logln_devel(log.LogLevel.info, @src(),
-                    "peer sck {} queue len {}",
-                    .{peer.sck, peer.out_queue.len});
-            if (peer.out_queue.first) |anode|
+                    "peer sck {}",
+                    .{peer.sck});
+            if (peer.send_head) |asend|
             {
-                const outs = anode.data;
-                const out_slice = outs.data[outs.offset..];
+                const out_slice = asend.out_data_slice[asend.sent..];
                 const sent = try posix.send(peer.sck, out_slice, 0);
                 try log.logln_devel(log.LogLevel.info, @src(),
                         "posix.send rv {}",
                         .{sent});
                 if (sent > 0)
                 {
-                    outs.offset += sent;
-                    if (outs.offset >= outs.data.len)
+                    asend.sent += sent;
+                    if (asend.sent >= asend.out_data_slice.len)
                     {
-                        peer.out_queue.remove(anode);
-                        anode.data.delete();
-                        g_allocator.destroy(anode);
+
+                        peer.send_head = asend.next;
+                        if (peer.send_head == null)
+                        {
+                            // if send_head is null, set send_tail to null
+                            peer.send_tail = null;
+                        }
+                        g_allocator.free(asend.out_data_slice);
+                        g_allocator.destroy(asend);
                     }
                 }
                 else
@@ -529,7 +559,7 @@ fn tty_main_loop(info: *tty_info_t) !void
         {
             polls[poll_count].fd = aitem.sck;
             polls[poll_count].events = posix.POLL.IN;
-            if (aitem.out_queue.len > 0)
+            if (aitem.send_tail != null)
             {
                 // we have data to write
                 polls[poll_count].events |= posix.POLL.OUT;
@@ -553,7 +583,7 @@ fn tty_main_loop(info: *tty_info_t) !void
                 try log.logln(log.LogLevel.info, @src(), "{s}",
                         .{"new connection in"});
                 const sck = try posix.accept(info.sck, null, null, 0);
-                var peer = try info.peer_list.addOne();
+                var peer = try info.peer_list.addOne(g_allocator);
                 try peer.init();
                 peer.sck = sck;
             }
@@ -592,9 +622,28 @@ fn process_tty_info(info: *tty_info_t) !void
 //*****************************************************************************
 fn show_command_line_args() !void
 {
+    if ((builtin.zig_version.major == 0) and
+        (builtin.zig_version.minor < 15))
+    {
+        const stdout = std.io.getStdOut();
+        const writer = stdout.writer();
+        try show_command_line_args1(writer);
+    }
+    else
+    {
+        var buf: [1024]u8 = undefined;
+        const stdout = std.fs.File.stdout();
+        var stdout_writer = stdout.writer(&buf);
+        const writer = &stdout_writer.interface;
+        try show_command_line_args1(writer);
+        try writer.flush();
+    }
+}
+
+//*****************************************************************************
+fn show_command_line_args1(writer: anytype) !void
+{
     const app_name = std.mem.sliceTo(std.os.argv[0], 0);
-    const stdout = std.io.getStdOut();
-    const writer = stdout.writer();
     const vstr = builtin.zig_version_string;
     try writer.print("{s} - A tty publisher\n", .{app_name});
     try writer.print("built with zig version {s}\n", .{vstr});

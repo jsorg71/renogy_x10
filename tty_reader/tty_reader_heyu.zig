@@ -43,14 +43,14 @@ const info_t = struct
 };
 
 //*****************************************************************************
-fn term_sig(_: c_int) callconv(.C) void
+export fn term_sig(_: c_int) void
 {
     const msg: [4]u8 = .{'i', 'n', 't', 0};
     _ = posix.write(g_term[1], msg[0..4]) catch return;
 }
 
 //*****************************************************************************
-fn pipe_sig(_: c_int) callconv(.C) void
+export fn pipe_sig(_: c_int) void
 {
 }
 
@@ -59,7 +59,9 @@ fn setup_signals() !void
 {
     g_term = try posix.pipe();
     var sa: posix.Sigaction = undefined;
-    sa.mask = posix.empty_sigset;
+    sa.mask =
+    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor < 15))
+            posix.empty_sigset else posix.sigemptyset();
     sa.flags = 0;
     sa.handler = .{.handler = term_sig};
     if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor == 13))
@@ -88,9 +90,28 @@ fn cleanup_signals() void
 //*****************************************************************************
 fn show_command_line_args() !void
 {
+    if ((builtin.zig_version.major == 0) and
+        (builtin.zig_version.minor < 15))
+    {
+        const stdout = std.io.getStdOut();
+        const writer = stdout.writer();
+        try show_command_line_args1(writer);
+    }
+    else
+    {
+        var buf: [1024]u8 = undefined;
+        const stdout = std.fs.File.stdout();
+        var stdout_writer = stdout.writer(&buf);
+        const writer = &stdout_writer.interface;
+        try show_command_line_args1(writer);
+        try writer.flush();
+    }
+}
+
+//*****************************************************************************
+fn show_command_line_args1(writer: anytype) !void
+{
     const app_name = std.mem.sliceTo(std.os.argv[0], 0);
-    const stdout = std.io.getStdOut();
-    const writer = stdout.writer();
     const vstr = builtin.zig_version_string;
     try writer.print("{s} - A tty subsriber\n", .{app_name});
     try writer.print("built with zig version {s}\n", .{vstr});
@@ -226,7 +247,7 @@ fn process_csck_in(info: *info_t, ins: *parse.parse_t) !void
         {
             if (info.code == 0)
             {
-                const s = try parse.create_from_slice(&g_allocator,
+                const s = try parse.parse_t.create_from_slice(&g_allocator,
                         ins.data[4..info.readed]);
                 defer s.delete();
                 try process_msg(info, s);
@@ -368,7 +389,7 @@ pub fn main() !void
     const address_len = address.getOsSockLen();
     try posix.connect(info.csck, &address.any, address_len);
 
-    const ins = try parse.create(&g_allocator, 64 * 1024);
+    const ins = try parse.parse_t.create(&g_allocator, 64 * 1024);
     defer ins.delete();
 
     const main_loop_rv = main_loop(info, ins);

@@ -30,15 +30,31 @@ fn load_tty_config(file_name: []const u8) !*c.toml_table_t
     defer file.close();
     const file_stat = try file.stat();
     const file_size: usize = @intCast(file_stat.size);
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var in_stream = buf_reader.reader();
-    var buf: []u8 = undefined;
-    buf = try g_allocator.alloc(u8, file_size + 1);
+
+    var buf = try g_allocator.alloc(u8, file_size + 1);
     defer g_allocator.free(buf);
+    const buf1 = try g_allocator.alloc(u8, file_size + 1);
+    defer g_allocator.free(buf1);
+
+    var bytes_read: usize = 0;
+    if ((builtin.zig_version.major == 0) and
+            (builtin.zig_version.minor < 15))
+    {
+        var file_reader = std.io.bufferedReader(file.reader());
+        var reader = file_reader.reader();
+        bytes_read = try reader.read(buf);
+    }
+    else
+    {
+        var file_reader = file.reader(buf1);
+        const reader = &file_reader.interface;
+        bytes_read = try reader.readSliceShort(buf);
+    }
+
     var errbuf: []u8 = undefined;
     errbuf = try g_allocator.alloc(u8, g_error_buf_size);
     defer g_allocator.free(errbuf);
-    const bytes_read = try in_stream.read(buf);
+
     try log.logln(log.LogLevel.info, @src(),
             "file_size {} bytes read {}", .{file_size, bytes_read});
     try err_if(bytes_read > file_size, TomlError.FileSizeChanged);
@@ -54,7 +70,7 @@ fn load_tty_config(file_name: []const u8) !*c.toml_table_t
 }
 
 //*****************************************************************************
-fn toml_malloc(size: usize) callconv(.C) ?*anyopaque
+export fn my_toml_malloc(size: usize) ?*anyopaque
 {
     // if (builtin.mode == .ReleaseSafe)
     // {
@@ -68,7 +84,7 @@ fn toml_malloc(size: usize) callconv(.C) ?*anyopaque
 }
 
 //*****************************************************************************
-fn toml_free(ptr: ?*anyopaque) callconv(.C) void
+export fn my_toml_free(ptr: ?*anyopaque) void
 {
     std.c.free(ptr);
 }
@@ -80,7 +96,7 @@ pub fn setup_tty_info(allocator: *const std.mem.Allocator,
     try log.logln(log.LogLevel.info, @src(),
             "config file [{s}]", .{config_file});
     g_allocator = allocator;
-    c.toml_set_memutil(toml_malloc, toml_free);
+    c.toml_set_memutil(my_toml_malloc, my_toml_free);
     const table = try load_tty_config(config_file);
     defer c.toml_free(table);
     try log.logln(log.LogLevel.info, @src(),
@@ -182,7 +198,7 @@ pub fn setup_tty_info(allocator: *const std.mem.Allocator,
                             if (val.ok != 0) @intCast(val.u.i) else 0;
                 }
             }
-            try info.id_list.append(item);
+            try info.id_list.append(g_allocator.*, item);
         }
     }
 }
