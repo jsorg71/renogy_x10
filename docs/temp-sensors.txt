@@ -32,10 +32,10 @@ Modbus Function Code:
 0x03: Read keep register
 0x04: Read input register
 0x06: Write a single keep register
+0x10: Write more keep registers
 
 Comimark LY499
 
-0x10: Write more keep registers
 -----------------------------------------------------------------------------------
 Register Type       Register Address        Register contents       Number of bytes
 -----------------------------------------------------------------------------------

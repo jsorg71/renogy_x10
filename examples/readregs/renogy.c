@@ -3,10 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <unistd.h>
 #include <modbus.h>
 
-static int g_debug = 0;
-static int g_renogy_id = 1;
+// now set to change shun type for id 6 pzem
+
+static int g_debug = 1;
+//static int g_renogy_id = 10;
+static int g_renogy_id = 12;
 
 int
 main(int argc, char** argv)
@@ -18,7 +22,8 @@ main(int argc, char** argv)
     uint16_t tab_rp_registers[4];
     int error;
 
-    ctx = modbus_new_rtu("/dev/ttyS0", 9600, 'N', 8, 1);
+    //ctx = modbus_new_rtu("/dev/ttyS0", 9600, 'N', 8, 1);
+    ctx = modbus_new_rtu("/dev/ttyUSB0", 9600, 'N', 8, 1);
     if (ctx == NULL)
     {
         return 1;
@@ -53,15 +58,38 @@ main(int argc, char** argv)
     }
     printf("main: Connection ok\n");
 
-    tab_rp_registers[0] = 0;
-    modbus_read_registers(ctx, 0x100, 1, tab_rp_registers);
-    printf("modbus_read_registers 0x100 error %d read 0x%4.4X %d\n", error,
-           tab_rp_registers[0], tab_rp_registers[0]);
+    // tab_rp_registers[0] = 12;
+    // modbus_write_registers(ctx, 2, 1, tab_rp_registers);
 
-    tab_rp_registers[0] = 0;
-    modbus_read_registers(ctx, 0x101, 1, tab_rp_registers);
-    printf("modbus_read_registers 0x101 error %d read 0x%4.4X %d\n", error,
-           tab_rp_registers[0], tab_rp_registers[0]);
+    //modbus_write_register(ctx, 2, 12);
+
+    //tab_rp_registers[0] = 0;
+    //memset(tab_rp_registers, 0, sizeof(tab_rp_registers));
+    //modbus_read_registers(ctx, 0x100, 4, tab_rp_registers);
+    //printf("modbus_read_registers 0x100 error %d read 0x%4.4X %d\n", error,
+    //       tab_rp_registers[0], tab_rp_registers[0]);
+
+    // tab_rp_registers[0] = 0;
+
+    int index;
+    for (index = 0; index < 10; index++)
+    {
+        error = modbus_read_input_registers(ctx, index, 1, tab_rp_registers);
+        printf("modbus_read_input_registers index %d error %d read 0x%4.4X %d\n", index, error,
+               tab_rp_registers[0], tab_rp_registers[0]);
+        usleep(1000 * 1000 * 1);
+    }
+
+    // int index;
+    // for (index = 1; index < 3; index++)
+    // {
+    //     error = modbus_read_registers(ctx, index, 1, tab_rp_registers);
+    //     printf("modbus_read_registers index %d error %d read 0x%4.4X %d\n", index, error,
+    //            tab_rp_registers[0], tab_rp_registers[0]);
+    //     usleep(1000 * 1000 * 1);
+    // }
+
+    //modbus_write_register(ctx, 2, 10);
 
     modbus_free(ctx);
     return 0;
