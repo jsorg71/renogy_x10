@@ -41,6 +41,13 @@ read_count=0
 read_input_address=1
 read_input_count=2
 
+# ac pzem on charger 1
+[id12]
+read_address=0
+read_count=0
+read_input_address=0
+read_input_count=10
+
 #[id4]
 #read_address=0
 #read_count=4
