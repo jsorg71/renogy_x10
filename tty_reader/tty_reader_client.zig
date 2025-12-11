@@ -156,6 +156,26 @@ pub fn main() !void
                                 .{id, voltage, amps, watts, watthours, frequency, power_factor, alarm});
 		    }
 		}
+		else if ((type1 == 1) and (id == 13))
+		{
+		    if (address1 == 0 and count == 10)
+		    {
+                        var voltage: f32 = @floatFromInt(s.in_u16_le());
+                        voltage /= 10;
+                        var amps: f32 = @floatFromInt(s.in_u32_le());
+                        amps /= 1000;
+                        var watts: f32 = @floatFromInt(s.in_u32_le());
+                        watts /= 10;
+                        const watthours = s.in_u32_le();
+                        var frequency: f32 = @floatFromInt(s.in_u16_le());
+                        frequency /= 10;
+                        var power_factor: f32 = @floatFromInt(s.in_u16_le());
+                        power_factor /= 100;
+                        const alarm = s.in_u16_le();
+                        std.debug.print("id {} voltage {d:.1} amps {d:.3} watts {d:.1} watthours {} frequency {d:.1} power_factor {d:.2} alarm 0x{x}\n",
+                                .{id, voltage, amps, watts, watthours, frequency, power_factor, alarm});
+		    }
+		}
             }
         }
     }
