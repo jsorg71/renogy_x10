@@ -406,6 +406,30 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             try process_msg_table(info, table_name, value);
         }
     }
+    else if ((type1 == 1) and (id == 13))
+    {
+        if ((address1 == 0) and (count == 10))
+        {
+            // volts
+            try s.check_rem(2);
+            value = @floatFromInt(s.in_u16_le());
+            value /= 10;
+            table_name = "pzem13_volts";
+            try process_msg_table(info, table_name, value);
+            // amps
+            try s.check_rem(4);
+            value = @floatFromInt(s.in_u32_le());
+            value /= 1000;
+            table_name = "pzem13_amps";
+            try process_msg_table(info, table_name, value);
+            // watts
+            try s.check_rem(4);
+            value = @floatFromInt(s.in_u32_le());
+            value /= 10;
+            table_name = "pzem13_watts";
+            try process_msg_table(info, table_name, value);
+        }
+    }
 }
 
 //*****************************************************************************
