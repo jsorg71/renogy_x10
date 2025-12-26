@@ -446,7 +446,7 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
                     "POLL.IN set for sck {}", .{fd});
             const peer = try get_peer_by_sck(info, fd);
             const in_slice = peer.ins.data[peer.ins.offset..];
-            const read = try posix.recv(peer.sck, in_slice, 0);
+            const read = posix.recv(peer.sck, in_slice, 0) catch 0;
             if (read < 1)
             {
                 try log.logln(log.LogLevel.info, @src(),
@@ -467,7 +467,7 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
             if (peer.send_head) |asend|
             {
                 const out_slice = asend.out_data_slice[asend.sent..];
-                const sent = try posix.send(peer.sck, out_slice, 0);
+                const sent = posix.send(peer.sck, out_slice, 0) catch 0;
                 try log.logln_devel(log.LogLevel.info, @src(),
                         "posix.send rv {}",
                         .{sent});
@@ -614,6 +614,7 @@ fn process_tty_info(info: *tty_info_t) !void
     try log.logln(log.LogLevel.info, @src(), "modbus_connect: err {}",
             .{modbus_err});
     try err_if(modbus_err != 0, TtyError.ModbusConnectFailed);
+    defer c.modbus_close(info.ctx);
     modbus_err = c.modbus_set_debug(info.ctx, @intFromBool(info.modbus_debug));
     try err_if(modbus_err != 0, TtyError.ModbusSetDebugFailed);
     try tty_main_loop(info);
