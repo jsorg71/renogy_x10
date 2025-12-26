@@ -196,7 +196,7 @@ fn setup_signals() !void
             posix.empty_sigset else posix.sigemptyset();
     sa.flags = 0;
     sa.handler = .{.handler = term_sig};
-    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor == 13))
+    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor < 14))
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);
@@ -476,7 +476,6 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
                     asend.sent += sent;
                     if (asend.sent >= asend.out_data_slice.len)
                     {
-
                         peer.send_head = asend.next;
                         if (peer.send_head == null)
                         {
