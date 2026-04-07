@@ -538,6 +538,8 @@ fn clear_out_queue(info: *info_t) void
         g_allocator.free(asend.out_data_slice);
         g_allocator.destroy(asend);
     }
+    info.send_head = null;
+    info.send_tail = null;
 }
 
 //*****************************************************************************
