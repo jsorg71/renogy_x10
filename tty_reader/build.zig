@@ -56,6 +56,8 @@ pub fn build(b: *std.Build) !void
     tty_reader_influx.root_module.addImport("parse", b.createModule(.{
         .root_source_file = b.path("common/parse.zig"),
     }));
+    tty_reader_influx.addIncludePath(b.path("."));
+    tty_reader_influx.addCSourceFiles(.{.files = libtomlc_files});
     setExtraLibraryPaths(tty_reader_influx, target);
     b.installArtifact(tty_reader_influx);
     // tty_reader_heyu

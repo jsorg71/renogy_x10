@@ -1,0 +1,9 @@
+[main]
+influx_hostname="server3.xrdp.org"
+influx_port=8086
+influx_database="solar"
+influx_org="org1"
+influx_token="Wh4XF_BN120-dvfZiI0T6L7DIdG7Ma8JnSMW6GnMTpT5uG4qDlBFsEGS_jwo9eBD2pf2jtra7sgi0ajl5R-oEA=="
+influx_host_tag="serverA"
+connect_socket="/tmp/tty_reader.socket"
+log_file="/tmp/tty_reader_influx.log"

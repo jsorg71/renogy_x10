@@ -6,17 +6,29 @@ const parse = @import("parse");
 const git = @import("git.zig");
 const net = std.net;
 const posix = std.posix;
+const c = @cImport(
+{
+    @cInclude("toml.h");
+});
 
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
-
-const g_influx_database = "solar";
-const g_influx_token =
-    "Wh4XF_BN120-dvfZiI0T6L7DIdG7Ma8JnSMW6GnMTpT5" ++
-    "uG4qDlBFsEGS_jwo9eBD2pf2jtra7sgi0ajl5R-oEA==";
-const g_influx_hostname = "server3.xrdp.org";
-const g_influx_port: c_int = 8086;
 var g_deamonize: bool = false;
+var g_config_file: []const u8 = "";
+
+const influx_info_t = struct
+{
+    influx_hostname: [256]u8 = .{0} ** 256,
+    influx_port: c_int = 8086,
+    influx_database: [256]u8 = .{0} ** 256,
+    influx_org: [256]u8 = .{0} ** 256,
+    influx_token: [512]u8 = .{0} ** 512,
+    influx_host_tag: [256]u8 = .{0} ** 256,
+    connect_socket: [256]u8 = .{0} ** 256,
+    log_file: [256]u8 = .{0} ** 256,
+};
+
+var g_influx_info: influx_info_t = .{};
 
 const send_t = struct
 {
@@ -120,10 +132,11 @@ fn show_command_line_args1(writer: anytype) !void
     try writer.print("{s} - A tty subsriber\n", .{app_name});
     try writer.print("built with zig version {s}\n", .{vstr});
     try writer.print("git sha1 {s}\n", .{git.g_git_sha1});
-    try writer.print("Usage: {s} [options]\n", .{app_name});
+    try writer.print("Usage: {s} [options] [config_file]\n", .{app_name});
     try writer.print("  -h: print this help\n", .{});
     try writer.print("  -F: run in foreground\n", .{});
     try writer.print("  -D: run in background\n", .{});
+    try writer.print("  config_file: toml config file\n", .{});
 }
 
 //*****************************************************************************
@@ -151,9 +164,215 @@ fn process_args() !void
         {
             g_deamonize = false;
         }
+        else if (slice_arg[0] != '-')
+        {
+            g_config_file = slice_arg;
+        }
         else
         {
             return error.ShowCommandLine;
+        }
+    }
+}
+
+//*****************************************************************************
+fn set_str(dest: []u8, src: []const u8) void
+{
+    @memset(dest, 0);
+    const copy_len = @min(src.len, dest.len - 1);
+    std.mem.copyForwards(u8, dest, src[0..copy_len]);
+}
+
+//*****************************************************************************
+fn set_influx_defaults(info: *influx_info_t) void
+{
+    set_str(&info.influx_hostname, "server3.xrdp.org");
+    info.influx_port = 8086;
+    set_str(&info.influx_database, "solar");
+    set_str(&info.influx_org, "org1");
+    set_str(&info.influx_token,
+            "Wh4XF_BN120-dvfZiI0T6L7DIdG7Ma8JnSMW6GnMTpT5" ++
+            "uG4qDlBFsEGS_jwo9eBD2pf2jtra7sgi0ajl5R-oEA==");
+    set_str(&info.influx_host_tag, "serverA");
+    set_str(&info.connect_socket, "/tmp/tty_reader.socket");
+    set_str(&info.log_file, "/tmp/tty_reader_influx.log");
+}
+
+//*****************************************************************************
+const TomlError = error
+{
+    FileSizeChanged,
+    TomlParseFailed,
+    TomlTableInFailed,
+};
+
+//*****************************************************************************
+inline fn err_if(b: bool, err: TomlError) !void
+{
+    if (b) return err else return;
+}
+
+//*****************************************************************************
+fn load_influx_config(file_name: []const u8) !*c.toml_table_t
+{
+    var file = try std.fs.cwd().openFile(file_name, .{});
+    defer file.close();
+    const file_stat = try file.stat();
+    const file_size: usize = @intCast(file_stat.size);
+
+    var buf = try g_allocator.alloc(u8, file_size + 1);
+    defer g_allocator.free(buf);
+    const buf1 = try g_allocator.alloc(u8, file_size + 1);
+    defer g_allocator.free(buf1);
+
+    var bytes_read: usize = 0;
+    if ((builtin.zig_version.major == 0) and
+            (builtin.zig_version.minor < 15))
+    {
+        var file_reader = std.io.bufferedReader(file.reader());
+        var reader = file_reader.reader();
+        bytes_read = try reader.read(buf);
+    }
+    else
+    {
+        var file_reader = file.reader(buf1);
+        const reader = &file_reader.interface;
+        bytes_read = try reader.readSliceShort(buf);
+    }
+
+    const errbuf_size: usize = 1024;
+    var errbuf: []u8 = undefined;
+    errbuf = try g_allocator.alloc(u8, errbuf_size);
+    defer g_allocator.free(errbuf);
+
+    try log.logln(log.LogLevel.info, @src(),
+            "file_size {} bytes read {}", .{file_size, bytes_read});
+    try err_if(bytes_read > file_size, TomlError.FileSizeChanged);
+    buf[bytes_read] = 0;
+    const table = c.toml_parse(buf.ptr, errbuf.ptr, errbuf_size);
+    if (table) |atable|
+    {
+        return atable;
+    }
+    try log.logln(log.LogLevel.info, @src(),
+            "toml_parse failed errbuf {s}", .{errbuf});
+    return TomlError.TomlParseFailed;
+}
+
+//*****************************************************************************
+export fn my_toml_malloc(size: usize) ?*anyopaque
+{
+    return std.c.malloc(size);
+}
+
+//*****************************************************************************
+export fn my_toml_free(ptr: ?*anyopaque) void
+{
+    std.c.free(ptr);
+}
+
+//*****************************************************************************
+fn setup_influx_info(info: *influx_info_t, config_file: []const u8) !void
+{
+    try log.logln(log.LogLevel.info, @src(),
+            "config file [{s}]", .{config_file});
+    c.toml_set_memutil(my_toml_malloc, my_toml_free);
+    const table = try load_influx_config(config_file);
+    defer c.toml_free(table);
+    try log.logln(log.LogLevel.info, @src(),
+            "load_influx_config ok for file [{s}]",
+            .{config_file});
+    var index: c_int = 0;
+    while (c.toml_key_in(table, index)) |akey| : (index += 1)
+    {
+        const akey_slice = std.mem.sliceTo(akey, 0);
+        if (std.mem.eql(u8, akey_slice, "main"))
+        {
+            const ltable = c.toml_table_in(table, akey);
+            try err_if(ltable == null, TomlError.TomlTableInFailed);
+            var lindex: c_int = 0;
+            while (c.toml_key_in(ltable, lindex)) |alkey| : (lindex += 1)
+            {
+                const alkey_slice = std.mem.sliceTo(alkey, 0);
+                if (std.mem.eql(u8, alkey_slice, "influx_hostname"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.influx_hostname,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "influx_port"))
+                {
+                    const val = c.toml_int_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        info.influx_port = @intCast(val.u.i);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "influx_database"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.influx_database,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "influx_org"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.influx_org,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "influx_token"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.influx_token,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "influx_host_tag"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.influx_host_tag,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "connect_socket"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.connect_socket,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "log_file"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.log_file,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+            }
         }
     }
 }
@@ -163,9 +382,10 @@ fn connect_isck(info: *info_t) !void
 {
     if (info.isck == -1)
     {
-        const port_u16: u16 = 8086;
+        const hostname = std.mem.sliceTo(&g_influx_info.influx_hostname, 0);
+        const port_u16: u16 = @intCast(g_influx_info.influx_port);
         const address_list = try std.net.getAddressList(g_allocator,
-                g_influx_hostname, port_u16);
+                hostname, port_u16);
         defer address_list.deinit();
         if (address_list.addrs.len < 1)
         {
@@ -193,7 +413,7 @@ fn connect_isck(info: *info_t) !void
         }
         try log.logln(log.LogLevel.info, @src(),
                 "connecting to host {s} sck {}",
-                .{g_influx_hostname, info.isck});
+                .{hostname, info.isck});
         info.connecting = true;
     }
 }
@@ -202,17 +422,22 @@ fn connect_isck(info: *info_t) !void
 fn process_msg_table(info: *info_t, table_name: []const u8,
         value: f32) !void
 {
+    const host_tag = std.mem.sliceTo(&g_influx_info.influx_host_tag, 0);
+    const database = std.mem.sliceTo(&g_influx_info.influx_database, 0);
+    const hostname = std.mem.sliceTo(&g_influx_info.influx_hostname, 0);
+    const org = std.mem.sliceTo(&g_influx_info.influx_org, 0);
+    const token = std.mem.sliceTo(&g_influx_info.influx_token, 0);
     const str1 = try std.fmt.bufPrint(&info.buffer_con,
-            "{s},host=serverA value={d:.2}\n", .{table_name, value});
+            "{s},host={s} value={d:.2}\n", .{table_name, host_tag, value});
     const str2 = try std.fmt.bufPrint(&info.buffer_out,
-            "POST /api/v2/write?org=org1&bucket={s} HTTP/1.1\r\n" ++
+            "POST /api/v2/write?org={s}&bucket={s} HTTP/1.1\r\n" ++
             "Host: {s}:{}\r\n" ++
             "Authorization: Token {s}\r\n" ++
             "Content-Type: text/plain; charset=utf-8\r\n" ++
             "Accept: application/json\r\n" ++
             "Content-Length: {}\r\n\r\n{s}",
-            .{g_influx_database, g_influx_hostname, g_influx_port,
-            g_influx_token, str1.len, str1});
+            .{org, database, hostname, g_influx_info.influx_port,
+            token, str1.len, str1});
     const send = try g_allocator.create(send_t);
     const out_data_slice = try g_allocator.alloc(u8, str2.len);
     send.* = .{.out_data_slice = out_data_slice};
@@ -714,6 +939,7 @@ pub fn main() !void
         }
         return err;
     }
+    set_influx_defaults(&g_influx_info);
     if (g_deamonize)
     {
         const rv = try posix.fork();
@@ -725,8 +951,9 @@ pub fn main() !void
             _ = try posix.open("/dev/null", .{.ACCMODE = .RDONLY}, 0);
             _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
             _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
+            const log_file = std.mem.sliceTo(&g_influx_info.log_file, 0);
             try log.initWithFile(&g_allocator, log.LogLevel.debug,
-                    "/tmp/tty_reader_influx.log");
+                    log_file);
         }
         else if (rv > 0)
         { // parent
@@ -740,6 +967,10 @@ pub fn main() !void
     }
     defer log.deinit();
     try log.logln(log.LogLevel.info, @src(), "tty_reader_influx", .{});
+    if (g_config_file.len > 0)
+    {
+        try setup_influx_info(&g_influx_info, g_config_file);
+    }
     // setup signals
     try setup_signals();
     defer cleanup_signals();
@@ -749,7 +980,8 @@ pub fn main() !void
     defer g_allocator.destroy(info);
     info.* = .{};
 
-    const address = try net.Address.initUnix("/tmp/tty_reader.socket");
+    const connect_socket = std.mem.sliceTo(&g_influx_info.connect_socket, 0);
+    const address = try net.Address.initUnix(connect_socket);
     const tpe: u32 = posix.SOCK.STREAM;
     info.csck = try posix.socket(address.any.family, tpe, 0);
     defer posix.close(info.csck);
