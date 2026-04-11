@@ -1,0 +1,7 @@
+[main]
+low_voltage_on=26.1
+millis_on=14400000
+charger_exe="/usr/local/bin/heyu"
+charger_HU="A2"
+connect_socket="/tmp/tty_reader.socket"
+log_file="/tmp/tty_reader_heyu.log"
