@@ -73,6 +73,8 @@ pub fn build(b: *std.Build) !void
     tty_reader_heyu.root_module.addImport("parse", b.createModule(.{
         .root_source_file = b.path("common/parse.zig"),
     }));
+    tty_reader_heyu.addIncludePath(b.path("."));
+    tty_reader_heyu.addCSourceFiles(.{.files = libtomlc_files});
     setExtraLibraryPaths(tty_reader_heyu, target);
     b.installArtifact(tty_reader_heyu);
 }

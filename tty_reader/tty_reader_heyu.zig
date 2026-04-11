@@ -6,20 +6,27 @@ const parse = @import("parse");
 const git = @import("git.zig");
 const net = std.net;
 const posix = std.posix;
+const c = @cImport(
+{
+    @cInclude("toml.h");
+});
 
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
-
-// low voltage when charger is turned on
-const g_low_voltage_on: f32 = 26.1;
-// time charger is on in milliseconds
-const g_millis_on: i32 = 4 * 60 * 60 * 1000;
-// path to heyu
-const g_charger_exe = "/usr/local/bin/heyu";
-// charger Home Unit
-const g_charger_HU = "A2";
-
 var g_deamonize: bool = false;
+var g_config_file: []const u8 = "";
+
+const heyu_info_t = struct
+{
+    low_voltage_on: f32 = 26.1,
+    millis_on: i32 = 4 * 60 * 60 * 1000,
+    charger_exe: [256]u8 = .{0} ** 256,
+    charger_HU: [256]u8 = .{0} ** 256,
+    connect_socket: [256]u8 = .{0} ** 256,
+    log_file: [256]u8 = .{0} ** 256,
+};
+
+var g_heyu_info: heyu_info_t = .{};
 
 const state_t = enum
 {
@@ -116,10 +123,11 @@ fn show_command_line_args1(writer: anytype) !void
     try writer.print("{s} - A tty subsriber\n", .{app_name});
     try writer.print("built with zig version {s}\n", .{vstr});
     try writer.print("git sha1 {s}\n", .{git.g_git_sha1});
-    try writer.print("Usage: {s} [options]\n", .{app_name});
+    try writer.print("Usage: {s} [options] [config_file]\n", .{app_name});
     try writer.print("  -h: print this help\n", .{});
     try writer.print("  -F: run in foreground\n", .{});
     try writer.print("  -D: run in background\n", .{});
+    try writer.print("  config_file: toml config file\n", .{});
 }
 
 //*****************************************************************************
@@ -147,6 +155,10 @@ fn process_args() !void
         {
             g_deamonize = false;
         }
+        else if (slice_arg[0] != '-')
+        {
+            g_config_file = slice_arg;
+        }
         else
         {
             return error.ShowCommandLine;
@@ -155,30 +167,210 @@ fn process_args() !void
 }
 
 //*****************************************************************************
+fn set_str(dest: []u8, src: []const u8) void
+{
+    @memset(dest, 0);
+    const copy_len = @min(src.len, dest.len - 1);
+    std.mem.copyForwards(u8, dest, src[0..copy_len]);
+}
+
+//*****************************************************************************
+fn set_heyu_defaults(info: *heyu_info_t) void
+{
+    info.low_voltage_on = 26.1;
+    info.millis_on = 4 * 60 * 60 * 1000;
+    set_str(&info.charger_exe, "/usr/local/bin/heyu");
+    set_str(&info.charger_HU, "A2");
+    set_str(&info.connect_socket, "/tmp/tty_reader.socket");
+    set_str(&info.log_file, "/tmp/tty_reader_heyu.log");
+}
+
+//*****************************************************************************
+const TomlError = error
+{
+    FileSizeChanged,
+    TomlParseFailed,
+    TomlTableInFailed,
+};
+
+//*****************************************************************************
+inline fn err_if(b: bool, err: TomlError) !void
+{
+    if (b) return err else return;
+}
+
+//*****************************************************************************
+fn load_heyu_config(file_name: []const u8) !*c.toml_table_t
+{
+    var file = try std.fs.cwd().openFile(file_name, .{});
+    defer file.close();
+    const file_stat = try file.stat();
+    const file_size: usize = @intCast(file_stat.size);
+
+    var buf = try g_allocator.alloc(u8, file_size + 1);
+    defer g_allocator.free(buf);
+    const buf1 = try g_allocator.alloc(u8, file_size + 1);
+    defer g_allocator.free(buf1);
+
+    var bytes_read: usize = 0;
+    if ((builtin.zig_version.major == 0) and
+            (builtin.zig_version.minor < 15))
+    {
+        var file_reader = std.io.bufferedReader(file.reader());
+        var reader = file_reader.reader();
+        bytes_read = try reader.read(buf);
+    }
+    else
+    {
+        var file_reader = file.reader(buf1);
+        const reader = &file_reader.interface;
+        bytes_read = try reader.readSliceShort(buf);
+    }
+
+    const errbuf_size: usize = 1024;
+    var errbuf: []u8 = undefined;
+    errbuf = try g_allocator.alloc(u8, errbuf_size);
+    defer g_allocator.free(errbuf);
+
+    try log.logln(log.LogLevel.info, @src(),
+            "file_size {} bytes read {}", .{file_size, bytes_read});
+    try err_if(bytes_read > file_size, TomlError.FileSizeChanged);
+    buf[bytes_read] = 0;
+    const table = c.toml_parse(buf.ptr, errbuf.ptr, errbuf_size);
+    if (table) |atable|
+    {
+        return atable;
+    }
+    try log.logln(log.LogLevel.info, @src(),
+            "toml_parse failed errbuf {s}", .{errbuf});
+    return TomlError.TomlParseFailed;
+}
+
+//*****************************************************************************
+export fn my_toml_malloc(size: usize) ?*anyopaque
+{
+    return std.c.malloc(size);
+}
+
+//*****************************************************************************
+export fn my_toml_free(ptr: ?*anyopaque) void
+{
+    std.c.free(ptr);
+}
+
+//*****************************************************************************
+fn setup_heyu_info(info: *heyu_info_t, config_file: []const u8) !void
+{
+    try log.logln(log.LogLevel.info, @src(),
+            "config file [{s}]", .{config_file});
+    c.toml_set_memutil(my_toml_malloc, my_toml_free);
+    const table = try load_heyu_config(config_file);
+    defer c.toml_free(table);
+    try log.logln(log.LogLevel.info, @src(),
+            "load_heyu_config ok for file [{s}]",
+            .{config_file});
+    var index: c_int = 0;
+    while (c.toml_key_in(table, index)) |akey| : (index += 1)
+    {
+        const akey_slice = std.mem.sliceTo(akey, 0);
+        if (std.mem.eql(u8, akey_slice, "main"))
+        {
+            const ltable = c.toml_table_in(table, akey);
+            try err_if(ltable == null, TomlError.TomlTableInFailed);
+            var lindex: c_int = 0;
+            while (c.toml_key_in(ltable, lindex)) |alkey| : (lindex += 1)
+            {
+                const alkey_slice = std.mem.sliceTo(alkey, 0);
+                if (std.mem.eql(u8, alkey_slice, "low_voltage_on"))
+                {
+                    const val = c.toml_double_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        info.low_voltage_on = @floatCast(val.u.d);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "millis_on"))
+                {
+                    const val = c.toml_int_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        info.millis_on = @intCast(val.u.i);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "charger_exe"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.charger_exe,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "charger_HU"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.charger_HU,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "connect_socket"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.connect_socket,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+                else if (std.mem.eql(u8, alkey_slice, "log_file"))
+                {
+                    const val = c.toml_string_in(ltable, alkey_slice);
+                    if (val.ok != 0)
+                    {
+                        set_str(&info.log_file,
+                                std.mem.sliceTo(val.u.s, 0));
+                        std.c.free(val.u.s);
+                    }
+                }
+            }
+        }
+    }
+}
+
+//*****************************************************************************
 fn charger_on() !void
 {
-    const cmdline = [_][]const u8{g_charger_exe, "on", g_charger_HU};
+    const exe = std.mem.sliceTo(&g_heyu_info.charger_exe, 0);
+    const hu = std.mem.sliceTo(&g_heyu_info.charger_HU, 0);
+    const cmdline = [_][]const u8{exe, "on", hu};
     const rv = try std.process.Child.run(
             .{.allocator = g_allocator, .argv = &cmdline});
     defer g_allocator.free(rv.stdout);
     defer g_allocator.free(rv.stderr);
     try log.logln(log.LogLevel.info, @src(),
             "rv from [{s} on {s}] {} stdout {s} stderr {s}",
-            .{g_charger_exe, g_charger_HU, rv.term.Exited,
+            .{exe, hu, rv.term.Exited,
             rv.stdout, rv.stderr});
 }
 
 //*****************************************************************************
 fn charger_off() !void
 {
-    const cmdline = [_][]const u8{g_charger_exe, "off", g_charger_HU};
+    const exe = std.mem.sliceTo(&g_heyu_info.charger_exe, 0);
+    const hu = std.mem.sliceTo(&g_heyu_info.charger_HU, 0);
+    const cmdline = [_][]const u8{exe, "off", hu};
     const rv = try std.process.Child.run(
             .{.allocator = g_allocator, .argv = &cmdline});
     defer g_allocator.free(rv.stdout);
     defer g_allocator.free(rv.stderr);
     try log.logln(log.LogLevel.info, @src(),
             "rv from [{s} off {s}] {} stdout {s} stderr {s}",
-            .{g_charger_exe, g_charger_HU, rv.term.Exited,
+            .{exe, hu, rv.term.Exited,
             rv.stdout, rv.stderr});
 }
 
@@ -204,14 +396,14 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             // heyu here
             if (info.state == state_t.LookingForLow)
             {
-                if (value < g_low_voltage_on)
+                if (value < g_heyu_info.low_voltage_on)
                 {
                     try log.logln(log.LogLevel.info, @src(),
                             "turning on charger", .{});
                     info.state = state_t.Charging;
                     const now = std.time.milliTimestamp();
                     info.charger_on_time = now;
-                    info.charger_off_time = now + g_millis_on;
+                    info.charger_off_time = now + g_heyu_info.millis_on;
                     try charger_on();
                 }
             }
@@ -347,6 +539,7 @@ pub fn main() !void
         }
         return err;
     }
+    set_heyu_defaults(&g_heyu_info);
     if (g_deamonize)
     {
         const rv = try posix.fork();
@@ -358,8 +551,9 @@ pub fn main() !void
             _ = try posix.open("/dev/null", .{.ACCMODE = .RDONLY}, 0);
             _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
             _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
+            const log_file = std.mem.sliceTo(&g_heyu_info.log_file, 0);
             try log.initWithFile(&g_allocator, log.LogLevel.debug,
-                    "/tmp/tty_reader_heyu.log");
+                    log_file);
         }
         else if (rv > 0)
         { // parent
@@ -373,6 +567,10 @@ pub fn main() !void
     }
     defer log.deinit();
     try log.logln(log.LogLevel.info, @src(), "tty_reader_heyu", .{});
+    if (g_config_file.len > 0)
+    {
+        try setup_heyu_info(&g_heyu_info, g_config_file);
+    }
     // setup signals
     try setup_signals();
     defer cleanup_signals();
@@ -382,7 +580,8 @@ pub fn main() !void
     defer g_allocator.destroy(info);
     info.* = .{};
 
-    const address = try net.Address.initUnix("/tmp/tty_reader.socket");
+    const connect_socket = std.mem.sliceTo(&g_heyu_info.connect_socket, 0);
+    const address = try net.Address.initUnix(connect_socket);
     const tpe: u32 = posix.SOCK.STREAM;
     info.csck = try posix.socket(address.any.family, tpe, 0);
     defer posix.close(info.csck);
