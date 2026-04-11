@@ -15,6 +15,7 @@ const c = @cImport(
 
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
+var g_hup: [2]i32 = .{-1, -1};
 const g_tty_name_max_length = 128;
 var g_deamonize: bool = false;
 var g_config_file: [128:0]u8 =
@@ -182,6 +183,13 @@ export fn term_sig(_: c_int) void
 }
 
 //*****************************************************************************
+export fn hup_sig(_: c_int) void
+{
+    const msg: [4]u8 = .{'h', 'u', 'p', 0};
+    _ = posix.write(g_hup[1], msg[0..4]) catch return;
+}
+
+//*****************************************************************************
 export fn pipe_sig(_: c_int) void
 {
 }
@@ -190,6 +198,7 @@ export fn pipe_sig(_: c_int) void
 fn setup_signals() !void
 {
     g_term = try posix.pipe();
+    g_hup = try posix.pipe();
     var sa: posix.Sigaction = undefined;
     sa.mask =
     if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor < 15))
@@ -200,6 +209,8 @@ fn setup_signals() !void
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{.handler = hup_sig};
+        try posix.sigaction(posix.SIG.HUP, &sa, null);
         sa.handler = .{.handler = pipe_sig};
         try posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
@@ -207,6 +218,8 @@ fn setup_signals() !void
     {
         posix.sigaction(posix.SIG.INT, &sa, null);
         posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{.handler = hup_sig};
+        posix.sigaction(posix.SIG.HUP, &sa, null);
         sa.handler = .{.handler = pipe_sig};
         posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
@@ -217,6 +230,8 @@ fn cleanup_signals() void
 {
     posix.close(g_term[0]);
     posix.close(g_term[1]);
+    posix.close(g_hup[0]);
+    posix.close(g_hup[1]);
 }
 
 //*****************************************************************************
@@ -515,6 +530,45 @@ fn check_peers(info: *tty_info_t, active_polls: []posix.pollfd,
 }
 
 //*****************************************************************************
+fn reload_config(info: *tty_info_t) !void
+{
+    try log.logln(log.LogLevel.info, @src(), "reloading config", .{});
+    const config_file = std.mem.sliceTo(&g_config_file, 0);
+    var new_info: tty_info_t = undefined;
+    try new_info.init();
+    if (toml.setup_tty_info(&g_allocator, &new_info, config_file)) |_|
+    {
+        info.id_list.deinit(g_allocator);
+        info.id_list = new_info.id_list;
+        info.item_mstime = new_info.item_mstime;
+        info.list_mstime = new_info.list_mstime;
+        info.modbus_debug = new_info.modbus_debug;
+        info.id_list_index = 0;
+        info.id_list_sub_index = 0;
+        info.next_modbus_time = null;
+        info.first_modbus_time = null;
+        info.last_modbus_time = null;
+        new_info.peer_list.deinit(g_allocator);
+        const modbus_err = c.modbus_set_debug(info.ctx,
+                @intFromBool(info.modbus_debug));
+        if (modbus_err != 0)
+        {
+            try log.logln(log.LogLevel.info, @src(),
+                    "modbus_set_debug failed {}", .{modbus_err});
+        }
+        try print_tty_info(info);
+        try log.logln(log.LogLevel.info, @src(),
+                "config reloaded ok", .{});
+    }
+    else |err|
+    {
+        new_info.deinit();
+        try log.logln(log.LogLevel.info, @src(),
+                "reload config failed {}", .{err});
+    }
+}
+
+//*****************************************************************************
 fn tty_main_loop(info: *tty_info_t) !void
 {
     const max_polls = 32;
@@ -543,6 +597,12 @@ fn tty_main_loop(info: *tty_info_t) !void
         // setup terminate fd
         const term_index = poll_count;
         polls[poll_count].fd = g_term[0];
+        polls[poll_count].events = posix.POLL.IN;
+        polls[poll_count].revents = 0;
+        poll_count += 1;
+        // setup hup fd
+        const hup_index = poll_count;
+        polls[poll_count].fd = g_hup[0];
         polls[poll_count].events = posix.POLL.IN;
         polls[poll_count].revents = 0;
         poll_count += 1;
@@ -575,6 +635,12 @@ fn tty_main_loop(info: *tty_info_t) !void
                 try log.logln(log.LogLevel.info, @src(), "{s}",
                         .{"term set shutting down"});
                 break;
+            }
+            if ((active_polls[hup_index].revents & posix.POLL.IN) != 0)
+            {
+                var hup_buf: [4]u8 = undefined;
+                _ = posix.read(g_hup[0], &hup_buf) catch 0;
+                try reload_config(info);
             }
             if ((active_polls[lsck_index].revents & posix.POLL.IN) != 0)
             {
@@ -749,17 +815,6 @@ pub fn main() !void
     const config_file = std.mem.sliceTo(&g_config_file, 0);
     try toml.setup_tty_info(&g_allocator, &tty_info, config_file);
     try print_tty_info(&tty_info);
-    // setup listen socket
-    const listen_socket = std.mem.sliceTo(&tty_info.listen_socket, 0);
-    posix.unlink(listen_socket) catch |err|
-            if (err != error.FileNotFound) return err;
-    const tpe: u32 = posix.SOCK.STREAM;
-    var address = try net.Address.initUnix(listen_socket);
-    tty_info.sck = try posix.socket(address.any.family, tpe, 0);
-    defer posix.close(tty_info.sck);
-    const address_len = address.getOsSockLen();
-    try posix.bind(tty_info.sck, &address.any, address_len);
-    try posix.listen(tty_info.sck, 2);
     // setup modbus
     while (c.modbus_new_rtu(&tty_info.tty, 9600, 'N', 8, 1)) |actx|
     {
@@ -768,6 +823,18 @@ pub fn main() !void
                 "modbus_new_rtu ok for {s}",
                 .{std.mem.sliceTo(&tty_info.tty, 0)});
         tty_info.ctx = actx;
+        // setup listen socket
+        const listen_socket = std.mem.sliceTo(&tty_info.listen_socket, 0);
+        posix.unlink(listen_socket) catch |err|
+                if (err != error.FileNotFound) return err;
+        const tpe: u32 = posix.SOCK.STREAM;
+        var address = try net.Address.initUnix(listen_socket);
+        tty_info.sck = try posix.socket(address.any.family, tpe, 0);
+        defer posix.close(tty_info.sck);
+        const address_len = address.getOsSockLen();
+        try posix.bind(tty_info.sck, &address.any, address_len);
+        try posix.listen(tty_info.sck, 2);
+        // setup more modbus, loop
         const process_tty_info_rv = process_tty_info(&tty_info);
         if (process_tty_info_rv) |_|
         {
