@@ -718,6 +718,7 @@ fn show_command_line_args1(writer: anytype) !void
     try writer.print("  -h: print this help\n", .{});
     try writer.print("  -F: run in foreground\n", .{});
     try writer.print("  -D: run in background\n", .{});
+    try writer.print("  -c: toml config file\n, defaults to tty0.toml", .{});
 }
 
 //*****************************************************************************

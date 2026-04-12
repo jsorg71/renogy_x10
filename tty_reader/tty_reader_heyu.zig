@@ -14,7 +14,8 @@ const c = @cImport(
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
 var g_deamonize: bool = false;
-var g_config_file: []const u8 = "";
+var g_config_file: [128:0]u8 =
+        .{'t', 't', 'y', '_', 'h', 'e', 'y', 'u', '0', '.', 't', 'o', 'm', 'l'} ++ .{0} ** 114;
 
 const heyu_info_t = struct
 {
@@ -123,11 +124,11 @@ fn show_command_line_args1(writer: anytype) !void
     try writer.print("{s} - A tty subsriber\n", .{app_name});
     try writer.print("built with zig version {s}\n", .{vstr});
     try writer.print("git sha1 {s}\n", .{git.g_git_sha1});
-    try writer.print("Usage: {s} [options] [config_file]\n", .{app_name});
+    try writer.print("Usage: {s} [options]\n", .{app_name});
     try writer.print("  -h: print this help\n", .{});
     try writer.print("  -F: run in foreground\n", .{});
     try writer.print("  -D: run in background\n", .{});
-    try writer.print("  config_file: toml config file\n", .{});
+    try writer.print("  -c: toml config file\n, defaults to tty_heyu0.toml", .{});
 }
 
 //*****************************************************************************
@@ -155,9 +156,19 @@ fn process_args() !void
         {
             g_deamonize = false;
         }
-        else if (slice_arg[0] != '-')
+        else if (std.mem.eql(u8, slice_arg, "-c"))
         {
-            g_config_file = slice_arg;
+            index += 1;
+            if (index < count)
+            {
+                const slice_arg1 = std.mem.sliceTo(std.os.argv[index], 0);
+                if (slice_arg1.len < g_config_file.len)
+                {
+                    @memset(&g_config_file, 0);
+                    std.mem.copyForwards(u8, &g_config_file, slice_arg1);
+                    continue;
+                }
+            }
         }
         else
         {
@@ -567,10 +578,7 @@ pub fn main() !void
     }
     defer log.deinit();
     try log.logln(log.LogLevel.info, @src(), "tty_reader_heyu", .{});
-    if (g_config_file.len > 0)
-    {
-        try setup_heyu_info(&g_heyu_info, g_config_file);
-    }
+    try setup_heyu_info(&g_heyu_info, std.mem.sliceTo(&g_config_file, 0));
     // setup signals
     try setup_signals();
     defer cleanup_signals();
