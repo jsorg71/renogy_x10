@@ -160,7 +160,7 @@ pub const tty_info_t = struct // just one of these
 };
 
 //*****************************************************************************
-fn sleep(mstime: i32) !void
+fn tty_sleep(mstime: i32) !void
 {
     var polls: [1]posix.pollfd = undefined;
     polls[0].fd = g_term[0];
@@ -641,6 +641,7 @@ fn tty_main_loop(info: *tty_info_t) !void
                 var hup_buf: [4]u8 = undefined;
                 _ = posix.read(g_hup[0], &hup_buf) catch 0;
                 try reload_config(info);
+                return error.Reload;
             }
             if ((active_polls[lsck_index].revents & posix.POLL.IN) != 0)
             {
@@ -791,39 +792,41 @@ pub fn main() !void
             _ = try posix.open("/dev/null", .{.ACCMODE = .RDONLY}, 0);
             _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
             _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
-            try log.initWithFile(&g_allocator, log.LogLevel.debug,
-                    "/tmp/tty_reader.log");
         }
         else if (rv > 0)
         { // parent
-            std.debug.print("started with pid {}\n", .{rv});
             return;
         }
     }
-    else
-    {
-        try log.init(&g_allocator, log.LogLevel.debug);
-    }
-    defer log.deinit();
     // setup signals
     try setup_signals();
     defer cleanup_signals();
-    try log.logln(log.LogLevel.info, @src(), "signals init ok", .{});
     // setup tty_info
     var tty_info: tty_info_t = undefined;
     try tty_info.init();
     defer tty_info.deinit();
     const config_file = std.mem.sliceTo(&g_config_file, 0);
     try toml.setup_tty_info(&g_allocator, &tty_info, config_file);
-    try print_tty_info(&tty_info);
     // setup modbus
     while (c.modbus_new_rtu(&tty_info.tty, 9600, 'N', 8, 1)) |actx|
     {
         defer c.modbus_free(actx);
+        if (g_deamonize)
+        {
+            try log.initWithFile(&g_allocator, log.LogLevel.debug,
+                    "/tmp/tty_reader.log");
+        }
+        else
+        {
+            try log.init(&g_allocator, log.LogLevel.debug);
+        }
+        defer log.deinit();
+
         try log.logln(log.LogLevel.info, @src(),
                 "modbus_new_rtu ok for {s}",
                 .{std.mem.sliceTo(&tty_info.tty, 0)});
         tty_info.ctx = actx;
+        try print_tty_info(&tty_info);
         // setup listen socket
         const listen_socket = std.mem.sliceTo(&tty_info.listen_socket, 0);
         posix.unlink(listen_socket) catch |err|
@@ -843,9 +846,13 @@ pub fn main() !void
         }
         else |err|
         {
+            if (err == error.Reload)
+            {
+                continue;
+            }
             try log.logln(log.LogLevel.info, @src(),
                     "process_tty_info error {}", .{err});
-            try sleep(60000);
+            try tty_sleep(60000);
         }
     }
     try log.logln(log.LogLevel.info, @src(), "exit main", .{});

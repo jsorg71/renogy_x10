@@ -13,6 +13,7 @@ const c = @cImport(
 
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
 var g_term: [2]i32 = .{-1, -1};
+var g_hup: [2]i32 = .{-1, -1};
 var g_deamonize: bool = false;
 var g_config_file: [128:0]u8 =
         .{'t', 't', 'y', '_', 'h', 'e', 'y', 'u', '0', '.', 't', 'o', 'm', 'l'} ++ .{0} ** 114;
@@ -58,6 +59,13 @@ export fn term_sig(_: c_int) void
 }
 
 //*****************************************************************************
+export fn hup_sig(_: c_int) void
+{
+    const msg: [4]u8 = .{'h', 'u', 'p', 0};
+    _ = posix.write(g_hup[1], msg[0..4]) catch return;
+}
+
+//*****************************************************************************
 export fn pipe_sig(_: c_int) void
 {
 }
@@ -66,16 +74,19 @@ export fn pipe_sig(_: c_int) void
 fn setup_signals() !void
 {
     g_term = try posix.pipe();
+    g_hup = try posix.pipe();
     var sa: posix.Sigaction = undefined;
     sa.mask =
     if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor < 15))
             posix.empty_sigset else posix.sigemptyset();
     sa.flags = 0;
     sa.handler = .{.handler = term_sig};
-    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor == 13))
+    if ((builtin.zig_version.major == 0) and (builtin.zig_version.minor < 14))
     {
         try posix.sigaction(posix.SIG.INT, &sa, null);
         try posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{.handler = hup_sig};
+        try posix.sigaction(posix.SIG.HUP, &sa, null);
         sa.handler = .{.handler = pipe_sig};
         try posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
@@ -83,6 +94,8 @@ fn setup_signals() !void
     {
         posix.sigaction(posix.SIG.INT, &sa, null);
         posix.sigaction(posix.SIG.TERM, &sa, null);
+        sa.handler = .{.handler = hup_sig};
+        posix.sigaction(posix.SIG.HUP, &sa, null);
         sa.handler = .{.handler = pipe_sig};
         posix.sigaction(posix.SIG.PIPE, &sa, null);
     }
@@ -93,6 +106,8 @@ fn cleanup_signals() void
 {
     posix.close(g_term[0]);
     posix.close(g_term[1]);
+    posix.close(g_hup[0]);
+    posix.close(g_hup[1]);
 }
 
 //*****************************************************************************
@@ -468,6 +483,26 @@ fn csck_can_recv(info: *info_t, ins: *parse.parse_t) !void
 }
 
 //*****************************************************************************
+fn reload_config() !void
+{
+    try log.logln(log.LogLevel.info, @src(), "reloading config", .{});
+    const config_file = std.mem.sliceTo(&g_config_file, 0);
+    var new_info: heyu_info_t = .{};
+    set_heyu_defaults(&new_info);
+    if (setup_heyu_info(&new_info, config_file)) |_|
+    {
+        g_heyu_info = new_info;
+        try log.logln(log.LogLevel.info, @src(),
+                "config reloaded ok", .{});
+    }
+    else |err|
+    {
+        try log.logln(log.LogLevel.info, @src(),
+                "reload config failed {}", .{err});
+    }
+}
+
+//*****************************************************************************
 fn main_loop(info: *info_t, ins: *parse.parse_t) !void
 {
     const max_polls = 32;
@@ -499,6 +534,13 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
         polls[poll_count].revents = 0;
         poll_count += 1;
 
+        // setup hup fd
+        const hup_index = poll_count;
+        polls[poll_count].fd = g_hup[0];
+        polls[poll_count].events = posix.POLL.IN;
+        polls[poll_count].revents = 0;
+        poll_count += 1;
+
         // setup connect fd
         const csck_index = poll_count;
         polls[poll_count].fd = info.csck;
@@ -516,6 +558,13 @@ fn main_loop(info: *info_t, ins: *parse.parse_t) !void
                 try log.logln(log.LogLevel.info, @src(), "{s}",
                         .{"term set shutting down"});
                 break;
+            }
+            if ((active_polls[hup_index].revents & posix.POLL.IN) != 0)
+            {
+                var hup_buf: [4]u8 = undefined;
+                _ = posix.read(g_hup[0], &hup_buf) catch 0;
+                try reload_config();
+                return error.Reload;
             }
             if ((active_polls[csck_index].revents & posix.POLL.IN) != 0)
             {
@@ -562,48 +611,58 @@ pub fn main() !void
             _ = try posix.open("/dev/null", .{.ACCMODE = .RDONLY}, 0);
             _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
             _ = try posix.open("/dev/null", .{.ACCMODE = .WRONLY}, 0);
-            const log_file = std.mem.sliceTo(&g_heyu_info.log_file, 0);
-            try log.initWithFile(&g_allocator, log.LogLevel.debug,
-                    log_file);
         }
         else if (rv > 0)
         { // parent
-            std.debug.print("started with pid {}\n", .{rv});
             return;
         }
     }
-    else
-    {
-        try log.init(&g_allocator, log.LogLevel.debug);
-    }
-    defer log.deinit();
-    try log.logln(log.LogLevel.info, @src(), "tty_reader_heyu", .{});
     try setup_heyu_info(&g_heyu_info, std.mem.sliceTo(&g_config_file, 0));
     // setup signals
     try setup_signals();
     defer cleanup_signals();
-    try log.logln(log.LogLevel.info, @src(), "signals init ok", .{});
 
     const info = try g_allocator.create(info_t);
     defer g_allocator.destroy(info);
     info.* = .{};
 
-    const connect_socket = std.mem.sliceTo(&g_heyu_info.connect_socket, 0);
-    const address = try net.Address.initUnix(connect_socket);
-    const tpe: u32 = posix.SOCK.STREAM;
-    info.csck = try posix.socket(address.any.family, tpe, 0);
-    defer posix.close(info.csck);
-    const address_len = address.getOsSockLen();
-    try posix.connect(info.csck, &address.any, address_len);
-
     const ins = try parse.parse_t.create(&g_allocator, 64 * 1024);
     defer ins.delete();
 
-    const main_loop_rv = main_loop(info, ins);
-    if (main_loop_rv) |_| { } else |err|
+    while (true)
     {
-        try log.logln(log.LogLevel.info, @src(),
-                "main_loop error {}", .{err});
+        if (g_deamonize)
+        {
+            const log_file = std.mem.sliceTo(&g_heyu_info.log_file, 0);
+            try log.initWithFile(&g_allocator, log.LogLevel.debug,
+                    log_file);
+        }
+        else
+        {
+            try log.init(&g_allocator, log.LogLevel.debug);
+        }
+        defer log.deinit();
+        try log.logln(log.LogLevel.info, @src(), "tty_reader_heyu", .{});
+        // connect socket
+        const connect_socket = std.mem.sliceTo(&g_heyu_info.connect_socket, 0);
+        const address = try net.Address.initUnix(connect_socket);
+        const tpe: u32 = posix.SOCK.STREAM;
+        info.csck = try posix.socket(address.any.family, tpe, 0);
+        defer posix.close(info.csck);
+        const address_len = address.getOsSockLen();
+        try posix.connect(info.csck, &address.any, address_len);
+        // loop
+        const main_loop_rv = main_loop(info, ins);
+        if (main_loop_rv) |_| { } else |err|
+        {
+            if (err == error.Reload)
+            {
+                continue;
+            }
+            try log.logln(log.LogLevel.info, @src(),
+                    "main_loop error {}", .{err});
+        }
+        break;
     }
 
     if (info.state == state_t.Charging)
