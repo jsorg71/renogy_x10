@@ -1,0 +1,33 @@
+
+2 channel relay from amazon
+
+to read device RS485 address
+
+    uint16_t u16_array[1]
+    modbus_read_registers(cts, 0, 1, u16_array);
+
+to set the device RS485 address
+
+    uint16_t u16_array[1] = {2};
+    modbus_write_registers(ctx, 0, 1, u16_array);
+
+you can not use modbus_write_register for some reason, you must use modbus_write_registers
+
+to turn on a relay 0
+
+    modbus_write_bit(ctx, 0, 0xFF);
+
+to turn off a relay 0
+
+    modbus_write_bit(ctx, 0, 0);
+
+to turn on a relay 1
+
+    modbus_write_bit(ctx, 1, 0xFF);
+
+to turn off a relay 1
+
+    modbus_write_bit(ctx, 1, 0);
+
+
+
