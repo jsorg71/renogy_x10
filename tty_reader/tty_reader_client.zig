@@ -136,10 +136,10 @@ pub fn main() !void
                                 .{id, temp, temp * 1.8 + 32.0, hum});
                     }
                 }
-		else if ((type1 == 1) and (id == 12))
-		{
-		    if (address1 == 0 and count == 10)
-		    {
+                else if ((type1 == 1) and (id == 12))
+                {
+                    if (address1 == 0 and count == 10)
+                    {
                         var voltage: f32 = @floatFromInt(s.in_u16_le());
                         voltage /= 10;
                         var amps: f32 = @floatFromInt(s.in_u32_le());
@@ -154,12 +154,12 @@ pub fn main() !void
                         const alarm = s.in_u16_le();
                         std.debug.print("id {} voltage {d:.1} amps {d:.3} watts {d:.1} watthours {} frequency {d:.1} power_factor {d:.2} alarm 0x{x}\n",
                                 .{id, voltage, amps, watts, watthours, frequency, power_factor, alarm});
-		    }
-		}
-		else if ((type1 == 1) and (id == 13))
-		{
-		    if (address1 == 0 and count == 10)
-		    {
+                    }
+                }
+                else if ((type1 == 1) and (id == 13))
+                {
+                    if (address1 == 0 and count == 10)
+                    {
                         var voltage: f32 = @floatFromInt(s.in_u16_le());
                         voltage /= 10;
                         var amps: f32 = @floatFromInt(s.in_u32_le());
@@ -174,8 +174,25 @@ pub fn main() !void
                         const alarm = s.in_u16_le();
                         std.debug.print("id {} voltage {d:.1} amps {d:.3} watts {d:.1} watthours {} frequency {d:.1} power_factor {d:.2} alarm 0x{x}\n",
                                 .{id, voltage, amps, watts, watthours, frequency, power_factor, alarm});
-		    }
-		}
+                    }
+                }
+                else if ((type1 == 1) and (id == 14))
+                {
+                    if (address1 == 0 and count == 8)
+                    {
+                        var voltage: f32 = @floatFromInt(s.in_u16_le());
+                        voltage /= 100;
+                        var amps: f32 = @floatFromInt(s.in_u16_le());
+                        amps /= 100;
+                        var watts: f32 = @floatFromInt(s.in_u32_le());
+                        watts /= 10;
+                        const watthours = s.in_u32_le();
+                        const hiallarm = s.in_u16_le();
+                        const loallarm = s.in_u16_le();
+                        std.debug.print("id {} voltage {d:.2} amps {d:.2} watts {d:.1} watthours {} hiallarm 0x{x} loallarm 0x{x}\n",
+                                .{id, voltage, amps, watts, watthours, hiallarm, loallarm});
+                    }
+                }
             }
         }
     }
