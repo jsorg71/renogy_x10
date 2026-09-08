@@ -21,3 +21,54 @@ B       4       4 in 8 out      8 to 4          4 in 8 out
 A       5       5 in 7 out      7 to 5          5 in 7 out
 Ground  6, 3    Both in / out                   Both in / out
 
+
+D  = Device
+CA = Cable to master
+CB = Cable away from master
+
+D1 CA1 CB1
+D2 CA2 CB2
+D3 CA3 CB3
+D4 CA4
+D5 CA5
+D6 CA6 CB6
+D7     CB5
+D8     CB4
+   CA7 CB7
+   CA8 CB8
+
+-- 1 device
+                      device 1
+1 --------- 5V     >> pzem 5Volt
+2 --------- 5V     >> pzem 5Volt
+3 --------- Ground >> pzem Ground
+4 --------- B      >> pzem B
+5 --------- A      >> pzem A
+6 --------- Ground >> pzem Ground
+7 ----------A      << pzem A
+8 ----------B      << pzem B
+
+-- 2 devices
+                      device 1       device 2
+1 --------- 5V     >> pzem 5Volt  >> pzem 5Volt
+2 --------- 5V     >> pzem 5Volt  >> pzem 5Volt
+3 --------- Ground >> pzem Ground >> pzem Ground
+4 --------- B      >> pzem B      >> pzem B
+5 --------- A      >> pzem A      >> pzem A
+6 --------- Ground >> pzem Ground >> pzem Ground
+7 ----------A                     << pzem A
+8 ----------B                     << pzem B
+
+-- 3 devices
+                      device 1       device 2       device 3
+1 --------- 5V     >> pzem 5Volt  >> pzem 5Volt  >> pzem 5Volt
+2 --------- 5V     >> pzem 5Volt  >> pzem 5Volt  >> pzem 5Volt
+3 --------- Ground >> pzem Ground >> pzem Ground >> pzem Ground
+4 --------- B      >> pzem B      >> pzem B      >> pzem B
+5 --------- A      >> pzem A      >> pzem A      >> pzem A
+6 --------- Ground >> pzem Ground >> pzem Ground >> pzem Ground
+7 ----------A                                    << pzem A
+8 ----------B                                    << pzem B
+
+...
+
