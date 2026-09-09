@@ -681,6 +681,60 @@ fn process_msg(info: *info_t, s: *parse.parse_t) !void
             try process_msg_table(info, table_name, value);
         }
     }
+    else if ((type1 == 1) and (id == 14))
+    {
+        if ((address1 == 0) and (count == 8))
+        {
+            // volts
+            try s.check_rem(2);
+            const pzem14volts = s.in_u16_le();
+            value = @floatFromInt(pzem14volts);
+            value /= 100;
+            table_name = "pzem14_volts";
+            try process_msg_table(info, table_name, value);
+            // amps
+            try s.check_rem(2);
+            const pzem14amps = s.in_u16_le();
+            value = @floatFromInt(pzem14amps);
+            value /= 100;
+            table_name = "pzem14_amps";
+            try process_msg_table(info, table_name, value);
+            // watts
+            try s.check_rem(2);
+            const pzem14watts = s.in_u16_le();
+            value = @floatFromInt(pzem14watts);
+            value /= 10;
+            table_name = "pzem14_watts";
+            try process_msg_table(info, table_name, value);
+        }
+    }
+    else if ((type1 == 1) and (id == 15))
+    {
+        if ((address1 == 0) and (count == 8))
+        {
+            // volts
+            try s.check_rem(2);
+            const pzem15volts = s.in_u16_le();
+            value = @floatFromInt(pzem15volts);
+            value /= 100;
+            table_name = "pzem15_volts";
+            try process_msg_table(info, table_name, value);
+            // amps
+            try s.check_rem(2);
+            const pzem15amps = s.in_u16_le();
+            value = @floatFromInt(pzem15amps);
+            value /= 100;
+            table_name = "pzem15_amps";
+            try process_msg_table(info, table_name, value);
+            // watts
+            try s.check_rem(2);
+            const pzem15watts = s.in_u16_le();
+            value = @floatFromInt(pzem15watts);
+            value /= 10;
+            table_name = "pzem15_watts";
+            try process_msg_table(info, table_name, value);
+        }
+    }
 }
 
 //*****************************************************************************
