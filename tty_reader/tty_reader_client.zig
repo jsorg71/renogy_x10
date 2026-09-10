@@ -94,7 +94,7 @@ pub fn main() !void
                                 "percent {} " ++
                                 "voltage {d:.1} " ++
                                 "amps {d:.2} " ++
-                                "temp {} " ++
+                                "temp device {}C battery {}C " ++
                                 "load volts {} " ++
                                 "load amps {} " ++
                                 "load watts {} " ++
@@ -102,7 +102,7 @@ pub fn main() !void
                                 "pv amps {d:.2} " ++
                                 "pv watts {} percent {d:.1}\n",
                                 .{id, percent, voltage, amps,
-                                val1, val2, val3, val4,
+                                val1 >> 8, val1 & 0xFF, val2, val3, val4,
                                 pvvoltage, pvamps, pvwatts,
                                 (voltage * amps) / (pvvoltage * pvamps + 1)});
                     }
@@ -177,6 +177,23 @@ pub fn main() !void
                     }
                 }
                 else if ((type1 == 1) and (id == 14))
+                {
+                    if (address1 == 0 and count == 8)
+                    {
+                        var voltage: f32 = @floatFromInt(s.in_u16_le());
+                        voltage /= 100;
+                        var amps: f32 = @floatFromInt(s.in_u16_le());
+                        amps /= 100;
+                        var watts: f32 = @floatFromInt(s.in_u32_le());
+                        watts /= 10;
+                        const watthours = s.in_u32_le();
+                        const hiallarm = s.in_u16_le();
+                        const loallarm = s.in_u16_le();
+                        std.debug.print("id {} voltage {d:.2} amps {d:.2} watts {d:.1} watthours {} hiallarm 0x{x} loallarm 0x{x}\n",
+                                .{id, voltage, amps, watts, watthours, hiallarm, loallarm});
+                    }
+                }
+                else if ((type1 == 1) and (id == 15))
                 {
                     if (address1 == 0 and count == 8)
                     {
