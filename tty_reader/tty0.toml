@@ -62,6 +62,13 @@ read_count=0
 read_input_address=0
 read_input_count=8
 
+# pzem on invertor
+[id15]
+read_address=0
+read_count=0
+read_input_address=0
+read_input_count=8
+
 #[id4]
 #read_address=0
 #read_count=4
